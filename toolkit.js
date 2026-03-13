@@ -1,4 +1,3 @@
-<script>
 'use strict';
 /* ════════════════════════════════════════════════════════
    TOOLKIT PRO v3  —  Enterprise PDF & Image Suite
