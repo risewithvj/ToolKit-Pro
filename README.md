@@ -90,7 +90,9 @@ This software and its source code are protected by copyright law. Unauthorized c
 ---
 
 <div align="center">
-Made with ❤️ by Vijaya Kumar L
-<br>
-© 2026 ToolKit Pro. All rights reserved.
+  <img src="https://data.jsdelivr.com/v1/package/gh/risewithvj/ToolKit-Pro/badge" alt="jsDelivr Hits" />
+  <br><br>
+  Made with ❤️ by Vijaya Kumar L
+  <br>
+  © 2026 ToolKit Pro. All rights reserved.
 </div>
