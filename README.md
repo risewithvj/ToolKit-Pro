@@ -95,6 +95,4 @@ This software and its source code are protected by copyright law. Unauthorized c
 Made with ❤️ by Vijaya Kumar L
 <br>
 © 2026 ToolKit Pro. All rights reserved.
-</div>>
-
-```
+</div>
