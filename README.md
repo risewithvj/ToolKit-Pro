@@ -97,5 +97,5 @@ This software and its source code are protected by copyright law. Unauthorized c
   © 2026 ToolKit Pro. All rights reserved.
 </div>
 
-![Views](https://visitor-badge.laobi.icu/badge?page_id=risewithvj.risewithvj&color=purple&label=Profile+Views&style=for-the-badge)
+![Views](https://visitor-badge.laobi.icu/badge?page_id=risewithvj.ToolKit-Pro&color=purple&label=Profile+Views&style=for-the-badge)
 
