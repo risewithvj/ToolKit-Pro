@@ -346,7 +346,7 @@ function buildPage(id) {
   }
 
   document.getElementById('tmain').innerHTML = `
-    <div class="tmain-inner">
+    <div class="tmain-inner tool-shell-v2">
       <button class="mback" onclick="goHome()">
         <div class="mback-ic"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15,18 9,12 15,6"/></svg></div>
         Back to All Tools
@@ -358,58 +358,81 @@ function buildPage(id) {
         <span class="sep">/</span>
         <span class="cur">${t.label}</span>
       </div>
-      <div class="tool-hd">
-        <h1><div class="th-ic ${c.cls}" style="background:${c.bg};color:${c.fg}">${sv}</div>${t.label}</h1>
-        <p>${t.desc}</p>
-      </div>
+
+      <section class="tool-hero-v2">
+        <div class="tool-hd">
+          <h1><div class="th-ic ${c.cls}" style="background:${c.bg};color:${c.fg}">${sv}</div>${t.label}</h1>
+          <p>${t.desc}</p>
+        </div>
+        <div class="tool-kpis">
+          <div class="kpi"><span>Workflow</span><strong>4 Steps</strong></div>
+          <div class="kpi"><span>Privacy</span><strong>Local</strong></div>
+          <div class="kpi"><span>Batch</span><strong>${t.multi ? 'Enabled' : 'Single file'}</strong></div>
+        </div>
+      </section>
+
       <div class="wf-steps" id="wf-steps">
         <div class="wf-step active" data-step="upload"><span>1</span>Upload</div>
         <div class="wf-step" data-step="configure"><span>2</span>Configure</div>
         <div class="wf-step" data-step="process"><span>3</span>Process</div>
         <div class="wf-step" data-step="result"><span>4</span>Download</div>
       </div>
+
       ${warn}
-      ${dz}
-      <div class="flist" id="flist"></div>
-      <div class="queue-card" id="queue-card">
-        <div class="queue-top">
-          <strong>Batch Queue</strong>
-          <span id="queue-count">0 files</span>
-        </div>
-        <div class="queue-meta" id="queue-meta">No files selected yet.</div>
-        <div class="queue-actions">
-          <button onclick="sortQueueByName()">Sort A→Z</button>
-          <button onclick="clearQueue()">Clear queue</button>
-        </div>
-      </div>
-      ${opts}
-      <div class="preview-grid">
-        <div class="prevx-card" id="input-preview">
-          <div class="prevx-hd">
-            <h4>Input Preview</h4>
-            <span id="input-preview-meta">Upload files to inspect before processing</span>
+      <div class="workbench-v2">
+        <section class="wb-col wb-left">
+          <div class="wb-card">
+            <div class="wb-title">Input</div>
+            ${dz}
+            <div class="flist" id="flist"></div>
+            <div class="queue-card" id="queue-card">
+              <div class="queue-top">
+                <strong>Batch Queue</strong>
+                <span id="queue-count">0 files</span>
+              </div>
+              <div class="queue-meta" id="queue-meta">No files selected yet.</div>
+              <div class="queue-actions">
+                <button onclick="sortQueueByName()">Sort A→Z</button>
+                <button onclick="clearQueue()">Clear queue</button>
+              </div>
+            </div>
           </div>
-          <div class="prevx-bd" id="input-preview-body"></div>
-        </div>
-      </div>
-      ${sp}
-      <div class="act-area">
-        <button class="act-btn" id="act-btn" onclick="runTool()" ${needsFile?'disabled':''}>${IC.bolt} ${t.label}</button>
-        <button class="reset-btn" onclick="resetTool()">Reset</button>
-      </div>
-      <div class="prog" id="prog">
-        <div class="prog-top"><span class="prog-lbl" id="prog-lbl">Processing…</span><span class="prog-pct" id="prog-pct">0%</span></div>
-        <div class="prog-track"><div class="prog-bar" id="prog-bar"></div></div>
-        <div class="prog-sub" id="prog-sub">Preparing tool runtime…</div>
-      </div>
-      <div class="result" id="result">
-        <div class="result-hd">${IC.check}<h4>Complete!</h4></div>
-        <div class="result-bd"><div class="rstats" id="rstats"></div><div class="rcta" id="rcta"></div><div class="rfiles" id="rfiles"></div></div>
-        <div class="result-preview" id="result-preview"></div>
-      </div>
-      <div class="err-card" id="err">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <div><div id="err-msg"></div><div id="err-hint"></div><button class="retry-btn" onclick="runTool()">Retry</button></div>
+          <div class="preview-grid">
+            <div class="prevx-card" id="input-preview">
+              <div class="prevx-hd">
+                <h4>Input Preview</h4>
+                <span id="input-preview-meta">Upload files to inspect before processing</span>
+              </div>
+              <div class="prevx-bd" id="input-preview-body"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="wb-col wb-right">
+          ${opts}
+          ${sp}
+          <div class="wb-card action-card">
+            <div class="wb-title">Process</div>
+            <div class="act-area">
+              <button class="act-btn" id="act-btn" onclick="runTool()" ${needsFile?'disabled':''}>${IC.bolt} ${t.label}</button>
+              <button class="reset-btn" onclick="resetTool()">Reset</button>
+            </div>
+            <div class="prog" id="prog">
+              <div class="prog-top"><span class="prog-lbl" id="prog-lbl">Processing…</span><span class="prog-pct" id="prog-pct">0%</span></div>
+              <div class="prog-track"><div class="prog-bar" id="prog-bar"></div></div>
+              <div class="prog-sub" id="prog-sub">Preparing tool runtime…</div>
+            </div>
+          </div>
+          <div class="result" id="result">
+            <div class="result-hd">${IC.check}<h4>Complete!</h4></div>
+            <div class="result-bd"><div class="rstats" id="rstats"></div><div class="rcta" id="rcta"></div><div class="rfiles" id="rfiles"></div></div>
+            <div class="result-preview" id="result-preview"></div>
+          </div>
+          <div class="err-card" id="err">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div><div id="err-msg"></div><div id="err-hint"></div><button class="retry-btn" onclick="runTool()">Retry</button></div>
+          </div>
+        </section>
       </div>
     </div>`;
 
