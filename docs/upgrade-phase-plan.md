@@ -169,6 +169,10 @@
 3. Enterprise controls (audit logs, policy presets, watermark governance).
 
 ## Developer Action Checklist
+- [x] Add 4-step workflow rail, queue summary, and result preview shell.
+- [x] Add queue operations (sort/clear), duplicate guard, and large-input warnings.
+- [x] Add input preview system for image/text/PDF-first-page (with graceful fallback).
+- [x] Add richer processing feedback (elapsed timer) and retry CTA in error state.
 - [ ] Roll workflow shell to all special-case tools.
 - [ ] Add integration tests for queue, result preview, and reset state.
 - [ ] Add performance telemetry hooks (`process_start`, `process_end`, `bytes_in/out`).

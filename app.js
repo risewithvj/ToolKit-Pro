@@ -220,6 +220,9 @@ async function need(lib) {
 // ── TOOL STATE ────────────────────────────────────────
 let curTool = null, toolFiles = [], _rBM = null, _cBM = null, _cDS = 1, _cropLock = null;
 const MAX_FILE_BYTES = 120 * 1024 * 1024; // 120MB safety threshold for browser processing
+const LARGE_QUEUE_BYTES = 300 * 1024 * 1024;
+let _progTicker = null;
+let _progStartedAt = 0;
 
 // ── TOOL PAGE BUILDER ─────────────────────────────────
 // Note: CAT is defined in tools.js which loads first
@@ -374,8 +377,21 @@ function buildPage(id) {
           <span id="queue-count">0 files</span>
         </div>
         <div class="queue-meta" id="queue-meta">No files selected yet.</div>
+        <div class="queue-actions">
+          <button onclick="sortQueueByName()">Sort A→Z</button>
+          <button onclick="clearQueue()">Clear queue</button>
+        </div>
       </div>
       ${opts}
+      <div class="preview-grid">
+        <div class="prevx-card" id="input-preview">
+          <div class="prevx-hd">
+            <h4>Input Preview</h4>
+            <span id="input-preview-meta">Upload files to inspect before processing</span>
+          </div>
+          <div class="prevx-bd" id="input-preview-body"></div>
+        </div>
+      </div>
       ${sp}
       <div class="act-area">
         <button class="act-btn" id="act-btn" onclick="runTool()" ${needsFile?'disabled':''}>${IC.bolt} ${t.label}</button>
@@ -388,12 +404,12 @@ function buildPage(id) {
       </div>
       <div class="result" id="result">
         <div class="result-hd">${IC.check}<h4>Complete!</h4></div>
-        <div class="result-bd"><div class="rstats" id="rstats"></div><div class="rfiles" id="rfiles"></div></div>
+        <div class="result-bd"><div class="rstats" id="rstats"></div><div class="rcta" id="rcta"></div><div class="rfiles" id="rfiles"></div></div>
         <div class="result-preview" id="result-preview"></div>
       </div>
       <div class="err-card" id="err">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <div><div id="err-msg"></div><div id="err-hint"></div></div>
+        <div><div id="err-msg"></div><div id="err-hint"></div><button class="retry-btn" onclick="runTool()">Retry</button></div>
       </div>
     </div>`;
 
@@ -518,6 +534,9 @@ function onPick(files) {
   clearErr();
   updateWorkflow('configure');
   updateQueueCard();
+  renderInputPreview(toolFiles[0]);
+  const total = toolFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+  if (total > LARGE_QUEUE_BYTES) toast('Large queue detected. Processing may take longer on this device.', 'bad');
   if (curTool === 'crop-image')     loadCI(toolFiles[0]);
   if (curTool === 'resize-image')   loadRI(toolFiles[0]);
   if (curTool === 'image-info')     runImgInfo(toolFiles[0]);
@@ -550,6 +569,7 @@ async function renderFL() {
 function removeFile(i) {
   toolFiles.splice(i, 1); renderFL();
   if (!toolFiles.length) { const btn = document.getElementById('act-btn'); if (btn && TOOLS[curTool]?.accept !== null && !NO_FILE.has(curTool)) btn.disabled = true; }
+  renderInputPreview(toolFiles[0]);
   updateQueueCard();
   updateWorkflow('upload');
 }
@@ -572,7 +592,72 @@ function updateQueueCard() {
   }
   const total = toolFiles.reduce((sum, f) => sum + (f.size || 0), 0);
   countEl.textContent = `${toolFiles.length} file${toolFiles.length !== 1 ? 's' : ''}`;
-  metaEl.textContent = `Total input size ${fmtSz(total)} · Ready to process`;
+  const warning = total > LARGE_QUEUE_BYTES ? ' · Large queue mode' : '';
+  metaEl.textContent = `Total input size ${fmtSz(total)} · Ready to process${warning}`;
+  metaEl.classList.toggle('warn', total > LARGE_QUEUE_BYTES);
+}
+function sortQueueByName() {
+  if (!toolFiles.length) return;
+  toolFiles.sort((a, b) => a.name.localeCompare(b.name));
+  renderFL();
+  renderInputPreview(toolFiles[0]);
+  toast('Queue sorted by filename.', 'ok');
+}
+function clearQueue() {
+  if (!toolFiles.length) return;
+  toolFiles = [];
+  renderFL();
+  updateQueueCard();
+  updateWorkflow('upload');
+  const btn = document.getElementById('act-btn');
+  if (btn && TOOLS[curTool]?.accept !== null && !NO_FILE.has(curTool)) btn.disabled = true;
+  const pb = document.getElementById('input-preview-body');
+  const pm = document.getElementById('input-preview-meta');
+  if (pb) pb.innerHTML = '';
+  if (pm) pm.textContent = 'Upload files to inspect before processing';
+}
+async function renderInputPreview(file) {
+  const body = document.getElementById('input-preview-body');
+  const meta = document.getElementById('input-preview-meta');
+  if (!body || !meta) return;
+  if (!file) {
+    body.innerHTML = '';
+    meta.textContent = 'Upload files to inspect before processing';
+    return;
+  }
+  meta.textContent = `${file.name} · ${fmtSz(file.size)}`;
+  const n = file.name.toLowerCase();
+  if (file.type.startsWith('image/')) {
+    const url = URL.createObjectURL(file);
+    body.innerHTML = `<img class="prevx-img" src="${url}" alt="Input preview">`;
+    const img = body.querySelector('img');
+    if (img) img.onload = () => setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return;
+  }
+  if (n.endsWith('.txt') || n.endsWith('.md') || n.endsWith('.json') || n.endsWith('.csv') || n.endsWith('.xml') || n.endsWith('.html')) {
+    const txt = await readText(file);
+    body.innerHTML = `<pre class="prevx-pre">${escHtml(txt.slice(0, 2000))}${txt.length > 2000 ? '\n…' : ''}</pre>`;
+    return;
+  }
+  if (n.endsWith('.pdf')) {
+    try {
+      await need('pdfjs');
+      const arr = await readBuf(file);
+      const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+      const page = await pdf.getPage(1);
+      const vp = page.getViewport({ scale: 0.8 });
+      const cv = document.createElement('canvas');
+      cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+      await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      body.innerHTML = '';
+      body.appendChild(cv);
+      return;
+    } catch (e) {
+      body.innerHTML = `<div class="prevx-note">Preview unavailable offline. File is ready to process.</div>`;
+      return;
+    }
+  }
+  body.innerHTML = `<div class="prevx-note">Preview is not supported for this format yet. Continue to process and download output.</div>`;
 }
 
 // ── RUN / RESET ──────────────────────────────────────
@@ -615,6 +700,7 @@ async function runTool() {
   document.getElementById('result')?.classList.remove('show');
   document.getElementById('prog')?.classList.add('show');
   updateWorkflow('process');
+  startProgTicker();
   setProgSub('Initializing engine…');
   setP(5, 'Starting…');
   const fnName = TOOL_FNS[curTool];
@@ -632,6 +718,7 @@ async function runTool() {
   }
   setP(100, 'Done');
   setProgSub('Completed');
+  stopProgTicker();
   setTimeout(() => document.getElementById('prog')?.classList.remove('show'), 600);
 }
 function friendlyErr(msg) {
@@ -654,6 +741,7 @@ function resetTool() {
   clearErr();
   document.getElementById('result')?.classList.remove('show');
   document.getElementById('prog')?.classList.remove('show');
+  stopProgTicker();
   const tout = document.getElementById('tout'); if (tout) tout.innerHTML = '';
   document.getElementById('tout-wrap')?.classList.remove('show');
   const btn = document.getElementById('act-btn');
@@ -663,6 +751,7 @@ function resetTool() {
   const qo = document.getElementById('qr-out'); if (qo) qo.classList.remove('show');
   const bo = document.getElementById('bc-out'); if (bo) bo.classList.remove('show');
   const rp = document.getElementById('result-preview'); if (rp) rp.innerHTML = '';
+  renderInputPreview(null);
   updateQueueCard();
   updateWorkflow('upload');
 }
@@ -677,6 +766,18 @@ function setProgSub(text) {
   const psub = document.getElementById('prog-sub');
   if (psub) psub.textContent = text || '';
 }
+function startProgTicker() {
+  stopProgTicker();
+  _progStartedAt = Date.now();
+  _progTicker = setInterval(() => {
+    const sec = Math.max(1, Math.floor((Date.now() - _progStartedAt) / 1000));
+    setProgSub(`Processing… ${sec}s elapsed`);
+  }, 1000);
+}
+function stopProgTicker() {
+  if (_progTicker) clearInterval(_progTicker);
+  _progTicker = null;
+}
 
 // ── RESULT DISPLAY ────────────────────────────────────
 function showRes(stats, files) {
@@ -685,6 +786,10 @@ function showRes(stats, files) {
   updateWorkflow('result');
   const rs = document.getElementById('rstats');
   if (rs) rs.innerHTML = stats.map(s => `<div class="rstat"><strong>${s.v}</strong>${s.l}</div>`).join('');
+  const rcta = document.getElementById('rcta');
+  if (rcta) rcta.innerHTML = files.length > 1
+    ? `<button class="dl-all-btn" onclick="dlAllFiles()">Download All (${files.length})</button>`
+    : '';
   const rf = document.getElementById('rfiles');
   if (rf) rf.innerHTML = files.map((f, i) => `
     <div class="dl-row">
@@ -719,10 +824,15 @@ function dlFile(i) {
   const f = rEl._files[i]; if (!f) return;
   saveFile(f.blob, f.name);
 }
+async function dlAllFiles() {
+  const rEl = document.getElementById('result'); if (!rEl || !rEl._files?.length) return;
+  for (const f of rEl._files) await saveFile(f.blob, f.name);
+}
 
 // ── ERROR ──────────────────────────────────────────────
 function showErr(msg, hint) {
   document.getElementById('prog')?.classList.remove('show');
+  stopProgTicker();
   const e = document.getElementById('err');
   const em = document.getElementById('err-msg');
   const eh = document.getElementById('err-hint');
@@ -755,4 +865,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sun)  sun.style.display  = t === 'dark' ? '' : 'none';
   if (moon) moon.style.display = t === 'dark' ? 'none' : '';
   document.documentElement.setAttribute('data-theme', t);
+  document.addEventListener('keydown', (e) => {
+    if (!curTool) return;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); runTool(); }
+    if (e.key === 'Escape') { e.preventDefault(); resetTool(); }
+  });
 });
