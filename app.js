@@ -219,6 +219,7 @@ async function need(lib) {
 
 // ── TOOL STATE ────────────────────────────────────────
 let curTool = null, toolFiles = [], _rBM = null, _cBM = null, _cDS = 1, _cropLock = null;
+const MAX_FILE_BYTES = 120 * 1024 * 1024; // 120MB safety threshold for browser processing
 
 // ── TOOL PAGE BUILDER ─────────────────────────────────
 // Note: CAT is defined in tools.js which loads first
@@ -358,9 +359,22 @@ function buildPage(id) {
         <h1><div class="th-ic ${c.cls}" style="background:${c.bg};color:${c.fg}">${sv}</div>${t.label}</h1>
         <p>${t.desc}</p>
       </div>
+      <div class="wf-steps" id="wf-steps">
+        <div class="wf-step active" data-step="upload"><span>1</span>Upload</div>
+        <div class="wf-step" data-step="configure"><span>2</span>Configure</div>
+        <div class="wf-step" data-step="process"><span>3</span>Process</div>
+        <div class="wf-step" data-step="result"><span>4</span>Download</div>
+      </div>
       ${warn}
       ${dz}
       <div class="flist" id="flist"></div>
+      <div class="queue-card" id="queue-card">
+        <div class="queue-top">
+          <strong>Batch Queue</strong>
+          <span id="queue-count">0 files</span>
+        </div>
+        <div class="queue-meta" id="queue-meta">No files selected yet.</div>
+      </div>
       ${opts}
       ${sp}
       <div class="act-area">
@@ -370,10 +384,12 @@ function buildPage(id) {
       <div class="prog" id="prog">
         <div class="prog-top"><span class="prog-lbl" id="prog-lbl">Processing…</span><span class="prog-pct" id="prog-pct">0%</span></div>
         <div class="prog-track"><div class="prog-bar" id="prog-bar"></div></div>
+        <div class="prog-sub" id="prog-sub">Preparing tool runtime…</div>
       </div>
       <div class="result" id="result">
         <div class="result-hd">${IC.check}<h4>Complete!</h4></div>
         <div class="result-bd"><div class="rstats" id="rstats"></div><div class="rfiles" id="rfiles"></div></div>
+        <div class="result-preview" id="result-preview"></div>
       </div>
       <div class="err-card" id="err">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -399,6 +415,8 @@ function buildPage(id) {
     const flagSel = document.getElementById('opt-flags'); if (flagSel) flagSel.addEventListener('change', liveRegex);
     liveRegex();
   }, 60);
+  updateWorkflow('upload');
+  updateQueueCard();
 }
 
 // ── OPT ROW BUILDER ──────────────────────────────────
@@ -482,12 +500,24 @@ function tsUpdateInput() {
 function onPick(files) {
   if (!files || !files.length) return;
   const t = TOOLS[curTool];
-  if (t && t.multi) toolFiles = [...toolFiles, ...Array.from(files)];
-  else toolFiles = [files[0]];
+  const incoming = Array.from(files)
+    .filter(f => {
+      if ((f.size || 0) > MAX_FILE_BYTES) {
+        toast(`${f.name} exceeds 120MB browser safety limit.`, 'bad');
+        return false;
+      }
+      return true;
+    })
+    .filter(f => !toolFiles.some(tf => tf.name === f.name && tf.size === f.size && tf.lastModified === f.lastModified));
+  if (!incoming.length) return;
+  if (t && t.multi) toolFiles = [...toolFiles, ...incoming];
+  else toolFiles = [incoming[0]];
   renderFL();
   const btn = document.getElementById('act-btn');
   if (btn) btn.disabled = false;
   clearErr();
+  updateWorkflow('configure');
+  updateQueueCard();
   if (curTool === 'crop-image')     loadCI(toolFiles[0]);
   if (curTool === 'resize-image')   loadRI(toolFiles[0]);
   if (curTool === 'image-info')     runImgInfo(toolFiles[0]);
@@ -520,6 +550,29 @@ async function renderFL() {
 function removeFile(i) {
   toolFiles.splice(i, 1); renderFL();
   if (!toolFiles.length) { const btn = document.getElementById('act-btn'); if (btn && TOOLS[curTool]?.accept !== null && !NO_FILE.has(curTool)) btn.disabled = true; }
+  updateQueueCard();
+  updateWorkflow('upload');
+}
+
+function updateWorkflow(step) {
+  const order = ['upload', 'configure', 'process', 'result'];
+  const idx = order.indexOf(step);
+  document.querySelectorAll('.wf-step').forEach((el, i) => {
+    el.classList.toggle('active', i <= idx && idx >= 0);
+  });
+}
+function updateQueueCard() {
+  const countEl = document.getElementById('queue-count');
+  const metaEl = document.getElementById('queue-meta');
+  if (!countEl || !metaEl) return;
+  if (!toolFiles.length) {
+    countEl.textContent = '0 files';
+    metaEl.textContent = 'No files selected yet.';
+    return;
+  }
+  const total = toolFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+  countEl.textContent = `${toolFiles.length} file${toolFiles.length !== 1 ? 's' : ''}`;
+  metaEl.textContent = `Total input size ${fmtSz(total)} · Ready to process`;
 }
 
 // ── RUN / RESET ──────────────────────────────────────
@@ -554,14 +607,21 @@ const TOOL_FNS = {
 };
 
 async function runTool() {
+  if (TOOLS[curTool]?.accept !== null && !NO_FILE.has(curTool) && !toolFiles.length) {
+    showErr('Please upload at least one file to continue.', 'Use drag & drop or click browse above.');
+    return;
+  }
   clearErr();
   document.getElementById('result')?.classList.remove('show');
   document.getElementById('prog')?.classList.add('show');
+  updateWorkflow('process');
+  setProgSub('Initializing engine…');
   setP(5, 'Starting…');
   const fnName = TOOL_FNS[curTool];
   const fn = fnName ? window[fnName] : null;
   try {
     if (typeof fn === 'function') {
+      await new Promise(r => setTimeout(r, 32)); // yields UI for smooth loader paint
       await fn();
     } else {
       showErr('Tool "' + curTool + '" is not implemented yet.', '');
@@ -571,6 +631,7 @@ async function runTool() {
     console.error('[ToolKit Pro] Error in', curTool, e);
   }
   setP(100, 'Done');
+  setProgSub('Completed');
   setTimeout(() => document.getElementById('prog')?.classList.remove('show'), 600);
 }
 function friendlyErr(msg) {
@@ -601,6 +662,9 @@ function resetTool() {
   const po = document.getElementById('palette-out'); if (po) po.style.display = 'none';
   const qo = document.getElementById('qr-out'); if (qo) qo.classList.remove('show');
   const bo = document.getElementById('bc-out'); if (bo) bo.classList.remove('show');
+  const rp = document.getElementById('result-preview'); if (rp) rp.innerHTML = '';
+  updateQueueCard();
+  updateWorkflow('upload');
 }
 
 // ── PROGRESS ─────────────────────────────────────────
@@ -609,11 +673,16 @@ function setP(pct, lbl) {
   const plbl = document.getElementById('prog-lbl'); if (plbl && lbl) plbl.textContent = lbl;
   const ppct = document.getElementById('prog-pct'); if (ppct) ppct.textContent = pct + '%';
 }
+function setProgSub(text) {
+  const psub = document.getElementById('prog-sub');
+  if (psub) psub.textContent = text || '';
+}
 
 // ── RESULT DISPLAY ────────────────────────────────────
 function showRes(stats, files) {
   const rEl = document.getElementById('result'); if (!rEl) return;
   rEl.classList.add('show');
+  updateWorkflow('result');
   const rs = document.getElementById('rstats');
   if (rs) rs.innerHTML = stats.map(s => `<div class="rstat"><strong>${s.v}</strong>${s.l}</div>`).join('');
   const rf = document.getElementById('rfiles');
@@ -627,7 +696,23 @@ function showRes(stats, files) {
         Download
       </button>
     </div>`).join('');
+  renderResultPreview(files);
   rEl._files = files;
+}
+function renderResultPreview(files) {
+  const wrap = document.getElementById('result-preview');
+  if (!wrap) return;
+  const first = files?.[0];
+  if (!first?.blob) { wrap.innerHTML = ''; return; }
+  const n = (first.name || '').toLowerCase();
+  if (!n.match(/\.(png|jpe?g|webp|gif)$/)) {
+    wrap.innerHTML = `<div class="rp-empty">Preview available for image outputs. Download to inspect other formats.</div>`;
+    return;
+  }
+  const url = URL.createObjectURL(first.blob);
+  wrap.innerHTML = `<div class="rp-head">Output Preview</div><img class="rp-img" src="${url}" alt="Result preview">`;
+  const img = wrap.querySelector('img');
+  if (img) img.onload = () => setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 function dlFile(i) {
   const rEl = document.getElementById('result'); if (!rEl || !rEl._files) return;
@@ -671,4 +756,3 @@ document.addEventListener('DOMContentLoaded', () => {
   if (moon) moon.style.display = t === 'dark' ? 'none' : '';
   document.documentElement.setAttribute('data-theme', t);
 });
-
