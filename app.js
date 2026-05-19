@@ -219,6 +219,10 @@ async function need(lib) {
 
 // ── TOOL STATE ────────────────────────────────────────
 let curTool = null, toolFiles = [], _rBM = null, _cBM = null, _cDS = 1, _cropLock = null;
+const MAX_FILE_BYTES = 120 * 1024 * 1024; // 120MB safety threshold for browser processing
+const LARGE_QUEUE_BYTES = 300 * 1024 * 1024;
+let _progTicker = null;
+let _progStartedAt = 0;
 
 // ── TOOL PAGE BUILDER ─────────────────────────────────
 // Note: CAT is defined in tools.js which loads first
@@ -341,8 +345,39 @@ function buildPage(id) {
     </label>`;
   }
 
+  const inputStepLabel = needsFile ? 'Upload' : 'Setup';
+  const workbenchClass = needsFile ? 'workbench-v2' : 'workbench-v2 solo';
+  const inputLane = needsFile ? `
+        <section class="wb-col wb-left">
+          <div class="wb-card">
+            <div class="wb-title">Input</div>
+            ${dz}
+            <div class="flist" id="flist"></div>
+            <div class="queue-card" id="queue-card">
+              <div class="queue-top">
+                <strong>Batch Queue</strong>
+                <span id="queue-count">0 files</span>
+              </div>
+              <div class="queue-meta" id="queue-meta">No files selected yet.</div>
+              <div class="queue-actions">
+                <button onclick="sortQueueByName()">Sort A→Z</button>
+                <button onclick="clearQueue()">Clear queue</button>
+              </div>
+            </div>
+          </div>
+          <div class="preview-grid">
+            <div class="prevx-card" id="input-preview">
+              <div class="prevx-hd">
+                <h4>Input Preview</h4>
+                <span id="input-preview-meta">Upload files to inspect before processing</span>
+              </div>
+              <div class="prevx-bd" id="input-preview-body"></div>
+            </div>
+          </div>
+        </section>` : '';
+
   document.getElementById('tmain').innerHTML = `
-    <div class="tmain-inner">
+    <div class="tmain-inner tool-shell-v2">
       <button class="mback" onclick="goHome()">
         <div class="mback-ic"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15,18 9,12 15,6"/></svg></div>
         Back to All Tools
@@ -354,30 +389,54 @@ function buildPage(id) {
         <span class="sep">/</span>
         <span class="cur">${t.label}</span>
       </div>
-      <div class="tool-hd">
-        <h1><div class="th-ic ${c.cls}" style="background:${c.bg};color:${c.fg}">${sv}</div>${t.label}</h1>
-        <p>${t.desc}</p>
+
+      <section class="tool-hero-v2">
+        <div class="tool-hd">
+          <h1><div class="th-ic ${c.cls}" style="background:${c.bg};color:${c.fg}">${sv}</div>${t.label}</h1>
+          <p>${t.desc}</p>
+        </div>
+        <div class="tool-kpis">
+          <div class="kpi"><span>Workflow</span><strong>4 Steps</strong></div>
+          <div class="kpi"><span>Privacy</span><strong>Local</strong></div>
+          <div class="kpi"><span>Batch</span><strong>${needsFile ? (t.multi ? 'Enabled' : 'Single file') : 'No upload'}</strong></div>
+        </div>
+      </section>
+
+      <div class="wf-steps" id="wf-steps">
+        <div class="wf-step active" data-step="upload"><span>1</span>${inputStepLabel}</div>
+        <div class="wf-step" data-step="configure"><span>2</span>Configure</div>
+        <div class="wf-step" data-step="process"><span>3</span>Process</div>
+        <div class="wf-step" data-step="result"><span>4</span>Download</div>
       </div>
+
       ${warn}
-      ${dz}
-      <div class="flist" id="flist"></div>
-      ${opts}
-      ${sp}
-      <div class="act-area">
-        <button class="act-btn" id="act-btn" onclick="runTool()" ${needsFile?'disabled':''}>${IC.bolt} ${t.label}</button>
-        <button class="reset-btn" onclick="resetTool()">Reset</button>
-      </div>
-      <div class="prog" id="prog">
-        <div class="prog-top"><span class="prog-lbl" id="prog-lbl">Processing…</span><span class="prog-pct" id="prog-pct">0%</span></div>
-        <div class="prog-track"><div class="prog-bar" id="prog-bar"></div></div>
-      </div>
-      <div class="result" id="result">
-        <div class="result-hd">${IC.check}<h4>Complete!</h4></div>
-        <div class="result-bd"><div class="rstats" id="rstats"></div><div class="rfiles" id="rfiles"></div></div>
-      </div>
-      <div class="err-card" id="err">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <div><div id="err-msg"></div><div id="err-hint"></div></div>
+      <div class="${workbenchClass}">
+        ${inputLane}
+        <section class="wb-col wb-right">
+          ${opts}
+          ${sp}
+          <div class="wb-card action-card">
+            <div class="wb-title">Process</div>
+            <div class="act-area">
+              <button class="act-btn" id="act-btn" onclick="runTool()" ${needsFile?'disabled':''}>${IC.bolt} ${t.label}</button>
+              <button class="reset-btn" onclick="resetTool()">Reset</button>
+            </div>
+            <div class="prog" id="prog">
+              <div class="prog-top"><span class="prog-lbl" id="prog-lbl">Processing…</span><span class="prog-pct" id="prog-pct">0%</span></div>
+              <div class="prog-track"><div class="prog-bar" id="prog-bar"></div></div>
+              <div class="prog-sub" id="prog-sub">Preparing tool runtime…</div>
+            </div>
+          </div>
+          <div class="result" id="result">
+            <div class="result-hd">${IC.check}<h4>Complete!</h4></div>
+            <div class="result-bd"><div class="rstats" id="rstats"></div><div class="rcta" id="rcta"></div><div class="rfiles" id="rfiles"></div></div>
+            <div class="result-preview" id="result-preview"></div>
+          </div>
+          <div class="err-card" id="err">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div><div id="err-msg"></div><div id="err-hint"></div><button class="retry-btn" onclick="runTool()">Retry</button></div>
+          </div>
+        </section>
       </div>
     </div>`;
 
@@ -399,6 +458,8 @@ function buildPage(id) {
     const flagSel = document.getElementById('opt-flags'); if (flagSel) flagSel.addEventListener('change', liveRegex);
     liveRegex();
   }, 60);
+  updateWorkflow('upload');
+  updateQueueCard();
 }
 
 // ── OPT ROW BUILDER ──────────────────────────────────
@@ -482,12 +543,27 @@ function tsUpdateInput() {
 function onPick(files) {
   if (!files || !files.length) return;
   const t = TOOLS[curTool];
-  if (t && t.multi) toolFiles = [...toolFiles, ...Array.from(files)];
-  else toolFiles = [files[0]];
+  const incoming = Array.from(files)
+    .filter(f => {
+      if ((f.size || 0) > MAX_FILE_BYTES) {
+        toast(`${f.name} exceeds 120MB browser safety limit.`, 'bad');
+        return false;
+      }
+      return true;
+    })
+    .filter(f => !toolFiles.some(tf => tf.name === f.name && tf.size === f.size && tf.lastModified === f.lastModified));
+  if (!incoming.length) return;
+  if (t && t.multi) toolFiles = [...toolFiles, ...incoming];
+  else toolFiles = [incoming[0]];
   renderFL();
   const btn = document.getElementById('act-btn');
   if (btn) btn.disabled = false;
   clearErr();
+  updateWorkflow('configure');
+  updateQueueCard();
+  renderInputPreview(toolFiles[0]);
+  const total = toolFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+  if (total > LARGE_QUEUE_BYTES) toast('Large queue detected. Processing may take longer on this device.', 'bad');
   if (curTool === 'crop-image')     loadCI(toolFiles[0]);
   if (curTool === 'resize-image')   loadRI(toolFiles[0]);
   if (curTool === 'image-info')     runImgInfo(toolFiles[0]);
@@ -520,6 +596,95 @@ async function renderFL() {
 function removeFile(i) {
   toolFiles.splice(i, 1); renderFL();
   if (!toolFiles.length) { const btn = document.getElementById('act-btn'); if (btn && TOOLS[curTool]?.accept !== null && !NO_FILE.has(curTool)) btn.disabled = true; }
+  renderInputPreview(toolFiles[0]);
+  updateQueueCard();
+  updateWorkflow('upload');
+}
+
+function updateWorkflow(step) {
+  const order = ['upload', 'configure', 'process', 'result'];
+  const idx = order.indexOf(step);
+  document.querySelectorAll('.wf-step').forEach((el, i) => {
+    el.classList.toggle('active', i <= idx && idx >= 0);
+  });
+}
+function updateQueueCard() {
+  const countEl = document.getElementById('queue-count');
+  const metaEl = document.getElementById('queue-meta');
+  if (!countEl || !metaEl) return;
+  if (!toolFiles.length) {
+    countEl.textContent = '0 files';
+    metaEl.textContent = 'No files selected yet.';
+    return;
+  }
+  const total = toolFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+  countEl.textContent = `${toolFiles.length} file${toolFiles.length !== 1 ? 's' : ''}`;
+  const warning = total > LARGE_QUEUE_BYTES ? ' · Large queue mode' : '';
+  metaEl.textContent = `Total input size ${fmtSz(total)} · Ready to process${warning}`;
+  metaEl.classList.toggle('warn', total > LARGE_QUEUE_BYTES);
+}
+function sortQueueByName() {
+  if (!toolFiles.length) return;
+  toolFiles.sort((a, b) => a.name.localeCompare(b.name));
+  renderFL();
+  renderInputPreview(toolFiles[0]);
+  toast('Queue sorted by filename.', 'ok');
+}
+function clearQueue() {
+  if (!toolFiles.length) return;
+  toolFiles = [];
+  renderFL();
+  updateQueueCard();
+  updateWorkflow('upload');
+  const btn = document.getElementById('act-btn');
+  if (btn && TOOLS[curTool]?.accept !== null && !NO_FILE.has(curTool)) btn.disabled = true;
+  const pb = document.getElementById('input-preview-body');
+  const pm = document.getElementById('input-preview-meta');
+  if (pb) pb.innerHTML = '';
+  if (pm) pm.textContent = 'Upload files to inspect before processing';
+}
+async function renderInputPreview(file) {
+  const body = document.getElementById('input-preview-body');
+  const meta = document.getElementById('input-preview-meta');
+  if (!body || !meta) return;
+  if (!file) {
+    body.innerHTML = '';
+    meta.textContent = 'Upload files to inspect before processing';
+    return;
+  }
+  meta.textContent = `${file.name} · ${fmtSz(file.size)}`;
+  const n = file.name.toLowerCase();
+  if (file.type.startsWith('image/')) {
+    const url = URL.createObjectURL(file);
+    body.innerHTML = `<img class="prevx-img" src="${url}" alt="Input preview">`;
+    const img = body.querySelector('img');
+    if (img) img.onload = () => setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return;
+  }
+  if (n.endsWith('.txt') || n.endsWith('.md') || n.endsWith('.json') || n.endsWith('.csv') || n.endsWith('.xml') || n.endsWith('.html')) {
+    const txt = await readText(file);
+    body.innerHTML = `<pre class="prevx-pre">${escHtml(txt.slice(0, 2000))}${txt.length > 2000 ? '\n…' : ''}</pre>`;
+    return;
+  }
+  if (n.endsWith('.pdf')) {
+    try {
+      await need('pdfjs');
+      const arr = await readBuf(file);
+      const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+      const page = await pdf.getPage(1);
+      const vp = page.getViewport({ scale: 0.8 });
+      const cv = document.createElement('canvas');
+      cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+      await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      body.innerHTML = '';
+      body.appendChild(cv);
+      return;
+    } catch (e) {
+      body.innerHTML = `<div class="prevx-note">Preview unavailable offline. File is ready to process.</div>`;
+      return;
+    }
+  }
+  body.innerHTML = `<div class="prevx-note">Preview is not supported for this format yet. Continue to process and download output.</div>`;
 }
 
 // ── RUN / RESET ──────────────────────────────────────
@@ -554,14 +719,22 @@ const TOOL_FNS = {
 };
 
 async function runTool() {
+  if (TOOLS[curTool]?.accept !== null && !NO_FILE.has(curTool) && !toolFiles.length) {
+    showErr('Please upload at least one file to continue.', 'Use drag & drop or click browse above.');
+    return;
+  }
   clearErr();
   document.getElementById('result')?.classList.remove('show');
   document.getElementById('prog')?.classList.add('show');
+  updateWorkflow('process');
+  startProgTicker();
+  setProgSub('Initializing engine…');
   setP(5, 'Starting…');
   const fnName = TOOL_FNS[curTool];
   const fn = fnName ? window[fnName] : null;
   try {
     if (typeof fn === 'function') {
+      await new Promise(r => setTimeout(r, 32)); // yields UI for smooth loader paint
       await fn();
     } else {
       showErr('Tool "' + curTool + '" is not implemented yet.', '');
@@ -571,6 +744,8 @@ async function runTool() {
     console.error('[ToolKit Pro] Error in', curTool, e);
   }
   setP(100, 'Done');
+  setProgSub('Completed');
+  stopProgTicker();
   setTimeout(() => document.getElementById('prog')?.classList.remove('show'), 600);
 }
 function friendlyErr(msg) {
@@ -593,6 +768,7 @@ function resetTool() {
   clearErr();
   document.getElementById('result')?.classList.remove('show');
   document.getElementById('prog')?.classList.remove('show');
+  stopProgTicker();
   const tout = document.getElementById('tout'); if (tout) tout.innerHTML = '';
   document.getElementById('tout-wrap')?.classList.remove('show');
   const btn = document.getElementById('act-btn');
@@ -601,6 +777,10 @@ function resetTool() {
   const po = document.getElementById('palette-out'); if (po) po.style.display = 'none';
   const qo = document.getElementById('qr-out'); if (qo) qo.classList.remove('show');
   const bo = document.getElementById('bc-out'); if (bo) bo.classList.remove('show');
+  const rp = document.getElementById('result-preview'); if (rp) rp.innerHTML = '';
+  renderInputPreview(null);
+  updateQueueCard();
+  updateWorkflow('upload');
 }
 
 // ── PROGRESS ─────────────────────────────────────────
@@ -609,13 +789,34 @@ function setP(pct, lbl) {
   const plbl = document.getElementById('prog-lbl'); if (plbl && lbl) plbl.textContent = lbl;
   const ppct = document.getElementById('prog-pct'); if (ppct) ppct.textContent = pct + '%';
 }
+function setProgSub(text) {
+  const psub = document.getElementById('prog-sub');
+  if (psub) psub.textContent = text || '';
+}
+function startProgTicker() {
+  stopProgTicker();
+  _progStartedAt = Date.now();
+  _progTicker = setInterval(() => {
+    const sec = Math.max(1, Math.floor((Date.now() - _progStartedAt) / 1000));
+    setProgSub(`Processing… ${sec}s elapsed`);
+  }, 1000);
+}
+function stopProgTicker() {
+  if (_progTicker) clearInterval(_progTicker);
+  _progTicker = null;
+}
 
 // ── RESULT DISPLAY ────────────────────────────────────
 function showRes(stats, files) {
   const rEl = document.getElementById('result'); if (!rEl) return;
   rEl.classList.add('show');
+  updateWorkflow('result');
   const rs = document.getElementById('rstats');
   if (rs) rs.innerHTML = stats.map(s => `<div class="rstat"><strong>${s.v}</strong>${s.l}</div>`).join('');
+  const rcta = document.getElementById('rcta');
+  if (rcta) rcta.innerHTML = files.length > 1
+    ? `<button class="dl-all-btn" onclick="dlAllFiles()">Download All (${files.length})</button>`
+    : '';
   const rf = document.getElementById('rfiles');
   if (rf) rf.innerHTML = files.map((f, i) => `
     <div class="dl-row">
@@ -627,17 +828,38 @@ function showRes(stats, files) {
         Download
       </button>
     </div>`).join('');
+  renderResultPreview(files);
   rEl._files = files;
+}
+function renderResultPreview(files) {
+  const wrap = document.getElementById('result-preview');
+  if (!wrap) return;
+  const first = files?.[0];
+  if (!first?.blob) { wrap.innerHTML = ''; return; }
+  const n = (first.name || '').toLowerCase();
+  if (!n.match(/\.(png|jpe?g|webp|gif)$/)) {
+    wrap.innerHTML = `<div class="rp-empty">Preview available for image outputs. Download to inspect other formats.</div>`;
+    return;
+  }
+  const url = URL.createObjectURL(first.blob);
+  wrap.innerHTML = `<div class="rp-head">Output Preview</div><img class="rp-img" src="${url}" alt="Result preview">`;
+  const img = wrap.querySelector('img');
+  if (img) img.onload = () => setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 function dlFile(i) {
   const rEl = document.getElementById('result'); if (!rEl || !rEl._files) return;
   const f = rEl._files[i]; if (!f) return;
   saveFile(f.blob, f.name);
 }
+async function dlAllFiles() {
+  const rEl = document.getElementById('result'); if (!rEl || !rEl._files?.length) return;
+  for (const f of rEl._files) await saveFile(f.blob, f.name);
+}
 
 // ── ERROR ──────────────────────────────────────────────
 function showErr(msg, hint) {
   document.getElementById('prog')?.classList.remove('show');
+  stopProgTicker();
   const e = document.getElementById('err');
   const em = document.getElementById('err-msg');
   const eh = document.getElementById('err-hint');
@@ -670,5 +892,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sun)  sun.style.display  = t === 'dark' ? '' : 'none';
   if (moon) moon.style.display = t === 'dark' ? 'none' : '';
   document.documentElement.setAttribute('data-theme', t);
+  document.addEventListener('keydown', (e) => {
+    if (!curTool) return;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); runTool(); }
+    if (e.key === 'Escape') { e.preventDefault(); resetTool(); }
+  });
 });
-
