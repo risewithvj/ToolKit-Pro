@@ -316,12 +316,8 @@ async function doPdfToWord() {
   const f = toolFiles[0];
   const arr = await readBuf(f);
   const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
-  const escXml = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const escXml = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const paras = [];
-  const f = toolFiles[0];
-  const arr = await readBuf(f);
-  const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
-  const parts = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     setP(Math.round((p / pdf.numPages) * 85), `Extracting page ${p}/${pdf.numPages}…`);
     const page = await pdf.getPage(p);
@@ -338,27 +334,21 @@ async function doPdfToWord() {
       lastY = y;
     }
     if (line.length) paras.push(line.join(' ').trim());
-    paras.push(``); // page break paragraph spacer
+    paras.push('');
   }
-  const bodyXml = paras
-    .filter(Boolean)
-    .map(t => `<w:p><w:r><w:t xml:space="preserve">${escXml(t)}</w:t></w:r></w:p>`)
-    .join('');
+  const bodyXml = paras.filter(Boolean).map(t => `<w:p><w:r><w:t xml:space="preserve">${escXml(t)}</w:t></w:r></w:p>`).join('');
   const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" mc:Ignorable="w14 wp14"><w:body>${bodyXml}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
   const zip = new JSZip();
   zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
   zip.folder('_rels').file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
   zip.folder('word').file('document.xml', docXml);
-  const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
   const name = bn(f.name) + '.docx';
-    parts.push(tc.items.map(i => i.str).join(' '));
-  }
-  const blob = new Blob([parts.join('\n\n')], { type: 'application/msword' });
-  const name = bn(f.name) + '.doc';
   showRes([{ v: pdf.numPages + '', l: 'Pages' }, { v: fmtSz(blob.size), l: 'Output' }], [{ name, blob }]);
   saveFile(blob, name);
 }
+
 
 async function doWordToPdf() {
   if (!toolFiles.length) return;
