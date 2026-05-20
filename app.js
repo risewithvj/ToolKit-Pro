@@ -707,6 +707,7 @@ const TOOL_FNS = {
   'text-case':'doTC','lorem-ipsum':'doLorem','find-replace':'doFR','json-formatter':'doJSON',
   'xml-formatter':'doXML','csv-json':'doCJ','html-to-pdf':'doH2P','html-preview':'doHPExport',
   'invoice-generator':'doInvoice','meeting-minutes':'doMeeting',
+  'line-sorter':'doLineSorter','whitespace-remover':'doWhitespaceRemover','text-to-hex':'doTextToHex','hex-to-text':'doHexToText',
   // Security
   'password-gen':'doPWGen','uuid-gen':'doUUID','file-hash':'doHash','url-tool':'doURL',
   'text-encrypt':'doTE','barcode-gen':'doBarcode','metadata-scrubber':'doMetaScrub','file-encrypt':'doFEnc',
@@ -715,9 +716,11 @@ const TOOL_FNS = {
   // Dev
   'qr-generator':'doQR','timestamp':'doTS','regex-tester':'doRegex','diff-checker':'doDiff',
   'utm-builder':'doUTMBuilder','translate-text':'doTranslateText',
+  'url-parser':'doURLParser','url-decoder':'doURLDecoder','slug-generator':'doSlugGenerator','my-user-agent':'doMyUserAgent','my-ip':'doMyIP','keyboard-test':'doKeyboardTest','touchpad-test':'doTouchpadTest',
   // Util
   'pdf-text':'doPText','bulk-rename':'doBRen','img-to-portfolio':'doPFolio',
   'word-counter':'doWCount','csv-to-pdf':'doC2Pdf','base64-tool':'doB64',
+  'html-encode':'doHtmlEncode','html-decode':'doHtmlDecode','html-stripper':'doHtmlStripper','base32-encoder':'doBase32Encode','base32-decoder':'doBase32Decode','passphrase-generator':'doPassphraseGenerator','pin-generator':'doPinGenerator',
 };
 
 async function runTool() {
