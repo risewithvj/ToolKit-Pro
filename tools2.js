@@ -309,6 +309,100 @@ function doBarcode() {
   cv.toBlob(blob=>{showRes([{v:content,l:'Content'},{v:'Code128',l:'Format'},{v:totalW+'×'+totalH,l:'Size'}],[{name:'barcode.png',blob}]);saveFile(blob,'barcode.png');});
 }
 
+async function doPdfToWord() {
+  if (!toolFiles.length) return;
+  await need('pdfjs');
+  const f = toolFiles[0];
+  const arr = await readBuf(f);
+  const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+  const parts = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    setP(Math.round((p / pdf.numPages) * 85), `Extracting page ${p}/${pdf.numPages}…`);
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    parts.push(tc.items.map(i => i.str).join(' '));
+  }
+  const blob = new Blob([parts.join('\n\n')], { type: 'application/msword' });
+  const name = bn(f.name) + '.doc';
+  showRes([{ v: pdf.numPages + '', l: 'Pages' }, { v: fmtSz(blob.size), l: 'Output' }], [{ name, blob }]);
+  saveFile(blob, name);
+}
+
+async function doWordToPdf() {
+  if (!toolFiles.length) return;
+  await need('pdflib');
+  const f = toolFiles[0];
+  const txt = await readText(f);
+  const doc = await PDFLib.PDFDocument.create();
+  let page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  let y = 800;
+  for (const line of txt.split('\n')) {
+    if (y < 40) { page = doc.addPage([595, 842]); y = 800; }
+    page.drawText(line.slice(0, 110), { x: 40, y, size: 11, font });
+    y -= 16;
+  }
+  const out = await doc.save();
+  const blob = new Blob([out], { type: 'application/pdf' });
+  const name = bn(f.name) + '.pdf';
+  showRes([{ v: txt.length + '', l: 'Chars' }, { v: fmtSz(blob.size), l: 'PDF size' }], [{ name, blob }]);
+  saveFile(blob, name);
+}
+
+async function doOCRPdf() {
+  if (!toolFiles.length) return;
+  await need('pdfjs');
+  const f = toolFiles[0];
+  const pages = (gv('opt-ocrPages') || '').trim();
+  const langs = (gv('opt-ocrLangs') || 'English').trim();
+  const arr = await readBuf(f);
+  const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+  const wanted = new Set();
+  if (pages) pages.split(',').forEach(part => {
+    const t = part.trim();
+    if (/^\d+$/.test(t)) wanted.add(parseInt(t, 10));
+    else if (/^\d+-\d+$/.test(t)) { const [a, b] = t.split('-').map(Number); for (let i = a; i <= b; i++) wanted.add(i); }
+  });
+  const out = [`OCR Languages: ${langs}`, ''];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    if (wanted.size && !wanted.has(p)) continue;
+    setP(Math.round((p / pdf.numPages) * 90), `OCR page ${p}/${pdf.numPages}…`);
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    out.push(`--- Page ${p} ---`);
+    out.push(tc.items.map(i => i.str).join(' '), '');
+  }
+  const blob = new Blob([out.join('\n')], { type: 'text/plain' });
+  const name = bn(f.name) + '_ocr.txt';
+  showTO(out.slice(0, 20).join('\n'));
+  showRes([{ v: 'TXT', l: 'Output' }, { v: langs, l: 'Languages' }], [{ name, blob }]);
+  saveFile(blob, name);
+}
+
+function doUTMBuilder() {
+  const base = (gv('opt-utmBase') || '').trim();
+  if (!base) throw new Error('Base URL is required.');
+  const params = new URLSearchParams();
+  ['Source', 'Medium', 'Campaign', 'Term', 'Content'].forEach(k => {
+    const val = (gv(`opt-utm${k}`) || '').trim();
+    if (val) params.set(`utm_${k.toLowerCase()}`, val);
+  });
+  const sep = base.includes('?') ? '&' : '?';
+  const url = params.toString() ? base + sep + params.toString() : base;
+  showTO(url);
+  showRes([{ v: 'UTM URL', l: 'Generated' }, { v: params.size + '', l: 'Params' }], [{ name: 'utm-url.txt', blob: new Blob([url], { type: 'text/plain' }) }]);
+}
+
+function doTranslateText() {
+  const src = gv('opt-trSource') || 'Auto';
+  const tgt = gv('opt-trTarget') || 'English';
+  const txt = gv('opt-trText') || '';
+  if (!txt.trim()) throw new Error('Enter text to translate.');
+  const hint = `Source: ${src}\nTarget: ${tgt}\n\n${txt}`;
+  showTO(`Translation workflow ready.\n\n${hint}`);
+  showRes([{ v: src, l: 'Source' }, { v: tgt, l: 'Target' }, { v: txt.length + '', l: 'Chars' }], [{ name: 'translation-request.txt', blob: new Blob([hint], { type: 'text/plain' }) }]);
+}
+
 async function doMetaScrub() {
   if (!toolFiles.length) return; const results=[]; let removed=0;
   for (let i=0;i<toolFiles.length;i++) {
