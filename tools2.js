@@ -318,6 +318,10 @@ async function doPdfToWord() {
   const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
   const escXml = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const paras = [];
+  const f = toolFiles[0];
+  const arr = await readBuf(f);
+  const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+  const parts = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     setP(Math.round((p / pdf.numPages) * 85), `Extracting page ${p}/${pdf.numPages}…`);
     const page = await pdf.getPage(p);
@@ -348,6 +352,10 @@ async function doPdfToWord() {
   zip.folder('word').file('document.xml', docXml);
   const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
   const name = bn(f.name) + '.docx';
+    parts.push(tc.items.map(i => i.str).join(' '));
+  }
+  const blob = new Blob([parts.join('\n\n')], { type: 'application/msword' });
+  const name = bn(f.name) + '.doc';
   showRes([{ v: pdf.numPages + '', l: 'Pages' }, { v: fmtSz(blob.size), l: 'Output' }], [{ name, blob }]);
   saveFile(blob, name);
 }

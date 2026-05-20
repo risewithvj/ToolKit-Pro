@@ -924,8 +924,6 @@ function validateToolRuntime() {
 // Init on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
   refreshToolCountsUI();
-  setTimeout(refreshToolCountsUI, 0);
-  validateToolRuntime();
   renderStats();
   // Sync theme icon state
   const t = localStorage.getItem('tkp-theme') || 'dark';
