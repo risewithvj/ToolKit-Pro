@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="ToolKit Pro — 68 powerful file processing tools. PDF, Image, Text, Security, Developer tools. 100% local, zero cloud, zero uploads.">
-  <title>ToolKit Pro — 68 Professional File Tools</title>
+  <meta name="description" content="ToolKit Pro — powerful file processing tools. PDF, Image, Text, Security, Developer tools. 100% local, zero cloud, zero uploads.">
+  <title>ToolKit Pro — Professional File Tools</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,7 +30,7 @@
   </div>
   <div class="nsearch">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    <input type="text" id="search-inp" placeholder="Search 68 tools…" oninput="handleSearch(this.value)" autocomplete="off" spellcheck="false">
+    <input type="text" id="search-inp" placeholder="Search tools…" oninput="handleSearch(this.value)" autocomplete="off" spellcheck="false">
     <div id="search-x" onclick="clearSearch()" style="display:none">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
     </div>
@@ -73,14 +73,14 @@
             100% Local · Zero Cloud · Zero Uploads
           </div>
           <h1>Professional File Tools<br><span>in Your Browser</span></h1>
-          <p>68 tools for PDF, Image, Text, Security, and more. All processing happens locally on your device — your files never leave your computer.</p>
+          <p id="hero-subtitle">All processing happens locally on your device — your files never leave your computer.</p>
           <button class="hero-folder" id="hero-folder-btn" onclick="pickFolder()">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
             <span id="hero-folder-lbl">Set Output Folder (optional)</span>
           </button>
         </div>
         <div class="hero-r">
-          <div class="hm"><div class="hm-n">68</div><div class="hm-l">Tools</div></div>
+          <div class="hm"><div class="hm-n" id="home-tool-count">0</div><div class="hm-l">Tools</div></div>
           <div class="hm"><div class="hm-n" id="h-proc">0</div><div class="hm-l">Processed</div></div>
         </div>
       </div>
