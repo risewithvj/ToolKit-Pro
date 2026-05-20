@@ -326,7 +326,13 @@ function buildPage(id) {
     <div class="tout-wrap" id="tout-wrap"><div class="tout" id="tout" style="min-height:80px"></div><div class="regex-stats" id="regex-stats"></div><button class="copy-btn" onclick="copyOut()">${IC.copy} Copy Result</button></div>`;
 
   // Text output tools
-  const textOutTools = new Set(['text-case','lorem-ipsum','find-replace','json-formatter','xml-formatter','csv-json','url-tool','text-encrypt','timestamp','uuid-gen','password-gen']);
+  const textOutTools = new Set([
+    'text-case','lorem-ipsum','find-replace','json-formatter','xml-formatter','csv-json','url-tool','text-encrypt','timestamp','uuid-gen','password-gen',
+    'line-sorter','whitespace-remover','text-to-hex','hex-to-text',
+    'url-parser','url-decoder','slug-generator','my-user-agent','my-ip','keyboard-test','touchpad-test',
+    'html-encode','html-decode','html-stripper','base32-encoder','base32-decoder','passphrase-generator','pin-generator',
+    'utm-builder','translate-text'
+  ]);
   if (textOutTools.has(id))
     sp += `<div class="tout-wrap" id="tout-wrap"><div class="tout" id="tout"></div><button class="copy-btn" onclick="copyOut()">${IC.copy} Copy to Clipboard</button></div>`;
 
@@ -899,6 +905,20 @@ function copyOut() {
   navigator.clipboard.writeText(tout.innerText || tout.textContent || '')
     .then(() => toast('Copied to clipboard!', 'ok'))
     .catch(() => toast('Copy failed.', 'bad'));
+}
+
+function validateToolRuntime() {
+  try {
+    const toolIds = Object.keys(TOOLS || {});
+    const missingMap = toolIds.filter(id => !TOOL_FNS[id]);
+    const missingGrid = toolIds.filter(id => !Object.values(GRIDS || {}).flat().includes(id));
+    if (missingMap.length || missingGrid.length) {
+      console.warn('[ToolKit Pro] Runtime validation warnings', { missingMap, missingGrid });
+      toast('Some tools are not fully wired yet. Check console for details.', 'bad');
+    }
+  } catch (e) {
+    console.warn('[ToolKit Pro] validateToolRuntime failed', e);
+  }
 }
 
 // Init on DOM ready
