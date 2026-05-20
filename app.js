@@ -32,6 +32,20 @@ function renderStats() {
   ['stat-p','h-proc'].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = _st.p; });
   const sf = document.getElementById('stat-f'); if (sf) sf.textContent = _st.f;
 }
+function refreshToolCountsUI() {
+  const total = Object.keys(TOOLS || {}).length;
+  const homeCount = document.getElementById('home-tool-count');
+  if (homeCount) homeCount.textContent = String(total);
+  const search = document.getElementById('search-inp');
+  if (search) search.placeholder = `Search ${total} tools…`;
+  const sub = document.getElementById('hero-subtitle');
+  if (sub) sub.textContent = `${total} tools for PDF, Image, Text, Security, and more. All processing happens locally on your device — your files never leave your computer.`;
+  Object.entries(GRIDS || {}).forEach(([cat, ids]) => {
+    const block = document.getElementById(`cat-${cat}`);
+    const cnt = block?.querySelector('.cat-cnt');
+    if (cnt) cnt.textContent = String(ids.length);
+  });
+}
 
 // ── OUTPUT FOLDER ─────────────────────────────────────
 let _dirHandle = null;
@@ -889,6 +903,7 @@ function copyOut() {
 
 // Init on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
+  refreshToolCountsUI();
   renderStats();
   // Sync theme icon state
   const t = localStorage.getItem('tkp-theme') || 'dark';
