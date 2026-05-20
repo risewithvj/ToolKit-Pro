@@ -21,7 +21,6 @@ const TOOLS = {
   'pdf-to-csv':{cat:'pdf',ic:'table',label:'PDF → CSV',desc:'Extract table data from a PDF into a CSV spreadsheet.',accept:'.pdf',multi:false,tips:['Works best on simple text-based tables','Complex or scanned PDFs may not extract correctly','Always verify the output after extraction'],opts:[{id:'separator',label:'CSV Separator',type:'select',choices:['Comma (,)','Semicolon (;)','Tab'],def:'Comma (,)'}]},
   'pdf-bookmarks':{cat:'pdf',ic:'bookmark',label:'PDF Bookmarks',desc:'Add a clickable table of contents to a PDF.',accept:'.pdf',multi:false,tips:['Format: Title: PageNumber on each line','Bookmarks appear in PDF reader sidebar'],opts:[{id:'bookmarks',label:'Bookmarks',sub:'Format: Title: PageNumber — one per line',type:'__ta__',def:'Introduction: 1\nChapter 1: 3\nConclusion: 10'}]},
   'pdf-to-word':{cat:'pdf',ic:'text',label:'PDF → Word',desc:'Convert selectable-text PDFs into editable Word (.docx) files (no OCR).',accept:'.pdf',multi:false,tips:['Best for text-based PDFs','Scanned/image PDFs are not supported in this tool','Layout may differ from the original PDF'],opts:[{id:'keepBreaks',label:'Keep Line Breaks',type:'toggle',def:true}]},
-  'pdf-to-word':{cat:'pdf',ic:'text',label:'PDF → Word',desc:'Extract text from a PDF into a .doc-compatible file.',accept:'.pdf',multi:false,tips:['Best for text-based PDFs','Scanned PDFs need OCR for best results'],opts:[{id:'keepBreaks',label:'Keep Line Breaks',type:'toggle',def:true}]},
   'word-to-pdf':{cat:'pdf',ic:'pdf',label:'Word → PDF',desc:'Convert .doc/.docx text content into a clean PDF.',accept:'.doc,.docx,.txt',multi:false,tips:['Complex DOCX styling may not be preserved','Best for text-first documents'],opts:[]},
   'ocr-pdf':{cat:'pdf',ic:'search',label:'OCR PDF Tool',desc:'Extract text with multi-language OCR-style options and page ranges.',accept:'.pdf',multi:false,tips:['Select one or more languages for better accuracy','Leave page range empty to process all pages'],opts:[{id:'ocrLangs',label:'Languages',type:'__ta__',def:'English'},{id:'ocrFormat',label:'Output Format',type:'select',choices:['Text File (.txt)'],def:'Text File (.txt)'},{id:'ocrQuality',label:'Quality',type:'select',choices:['Low','Medium (Recommended)','High'],def:'Medium (Recommended)'},{id:'ocrPages',label:'Page Range',sub:'e.g., 1-3, 5, 7 (leave empty for all)',type:'text',def:''}]},
 
@@ -118,13 +117,6 @@ const GRIDS = {
 
 const NEW_TOOLS = new Set(['html-preview','diff-checker','barcode-gen','file-encrypt','metadata-scrubber','sprite-sheet','image-collage','blur-image','round-corners','colour-palette','uuid-gen']);
 const NO_FILE   = new Set(['text-case','lorem-ipsum','url-tool','text-encrypt','password-gen','uuid-gen','timestamp','regex-tester','diff-checker','invoice-generator','meeting-minutes','barcode-gen','qr-generator','html-preview','utm-builder','translate-text','line-sorter','whitespace-remover','text-to-hex','hex-to-text','url-parser','url-decoder','slug-generator','my-user-agent','my-ip','keyboard-test','touchpad-test','html-encode','html-decode','html-stripper','base32-encoder','base32-decoder','passphrase-generator','pin-generator']);
-  dev:   ['qr-generator','timestamp','regex-tester','diff-checker','utm-builder','translate-text'],
-  util:  ['pdf-text','bulk-rename','img-to-portfolio','word-counter','csv-to-pdf','base64-tool'],
-};
-
-const NEW_TOOLS = new Set(['html-preview','diff-checker','barcode-gen','file-encrypt','metadata-scrubber','sprite-sheet','image-collage','blur-image','round-corners','colour-palette','uuid-gen']);
-const NO_FILE   = new Set(['text-case','lorem-ipsum','url-tool','text-encrypt','password-gen','uuid-gen','timestamp','regex-tester','diff-checker','invoice-generator','meeting-minutes','barcode-gen','qr-generator','html-preview','utm-builder','translate-text']);
-
 // CAT must live here — tools.js runs before app.js
 const CAT = {
   pdf:  { bg:'rgba(255,92,92,.15)',   fg:'#ff5c5c', cls:'cpdf'   },
