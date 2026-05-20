@@ -696,6 +696,7 @@ const TOOL_FNS = {
   'add-page-numbers':'doPN','stamp-pdf':'doStamp','pdf-info':'doPInfo','delete-pdf-pages':'doDelP',
   'duplicate-pdf-pages':'doDupP','reorder-pdf':'doReOrd','pdf-header-footer':'doPHF',
   'flatten-pdf':'doFlat','pdf-thumbnail':'doPThumb','pdf-to-csv':'doPCsv','pdf-bookmarks':'doPBM',
+  'pdf-to-word':'doPdfToWord','word-to-pdf':'doWordToPdf','ocr-pdf':'doOCRPdf',
   // Image
   'compress-image':'doCImg','resize-image':'doRImg','crop-image':'doCropImg',
   'convert-to-jpg':'doC2J','convert-from-jpg':'doCFJ','grayscale':'doGray',
@@ -706,6 +707,7 @@ const TOOL_FNS = {
   'text-case':'doTC','lorem-ipsum':'doLorem','find-replace':'doFR','json-formatter':'doJSON',
   'xml-formatter':'doXML','csv-json':'doCJ','html-to-pdf':'doH2P','html-preview':'doHPExport',
   'invoice-generator':'doInvoice','meeting-minutes':'doMeeting',
+  'line-sorter':'doLineSorter','whitespace-remover':'doWhitespaceRemover','text-to-hex':'doTextToHex','hex-to-text':'doHexToText',
   // Security
   'password-gen':'doPWGen','uuid-gen':'doUUID','file-hash':'doHash','url-tool':'doURL',
   'text-encrypt':'doTE','barcode-gen':'doBarcode','metadata-scrubber':'doMetaScrub','file-encrypt':'doFEnc',
@@ -713,9 +715,12 @@ const TOOL_FNS = {
   'ico-generator':'doICO','svg-optimizer':'doSVGOpt','font-preview':'doFontRun','video-thumbnail':'doVThumb',
   // Dev
   'qr-generator':'doQR','timestamp':'doTS','regex-tester':'doRegex','diff-checker':'doDiff',
+  'utm-builder':'doUTMBuilder','translate-text':'doTranslateText',
+  'url-parser':'doURLParser','url-decoder':'doURLDecoder','slug-generator':'doSlugGenerator','my-user-agent':'doMyUserAgent','my-ip':'doMyIP','keyboard-test':'doKeyboardTest','touchpad-test':'doTouchpadTest',
   // Util
   'pdf-text':'doPText','bulk-rename':'doBRen','img-to-portfolio':'doPFolio',
   'word-counter':'doWCount','csv-to-pdf':'doC2Pdf','base64-tool':'doB64',
+  'html-encode':'doHtmlEncode','html-decode':'doHtmlDecode','html-stripper':'doHtmlStripper','base32-encoder':'doBase32Encode','base32-decoder':'doBase32Decode','passphrase-generator':'doPassphraseGenerator','pin-generator':'doPinGenerator',
 };
 
 async function runTool() {

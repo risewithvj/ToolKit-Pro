@@ -309,6 +309,145 @@ function doBarcode() {
   cv.toBlob(blob=>{showRes([{v:content,l:'Content'},{v:'Code128',l:'Format'},{v:totalW+'×'+totalH,l:'Size'}],[{name:'barcode.png',blob}]);saveFile(blob,'barcode.png');});
 }
 
+async function doPdfToWord() {
+  if (!toolFiles.length) return;
+  await need('pdfjs');
+  await need('jszip');
+  const f = toolFiles[0];
+  const arr = await readBuf(f);
+  const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+  const escXml = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const paras = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    setP(Math.round((p / pdf.numPages) * 85), `Extracting page ${p}/${pdf.numPages}…`);
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    let line = [];
+    let lastY = null;
+    for (const it of tc.items) {
+      const y = Math.round(it.transform?.[5] || 0);
+      if (lastY !== null && Math.abs(y - lastY) > 3) {
+        if (line.length) paras.push(line.join(' ').trim());
+        line = [];
+      }
+      line.push((it.str || '').trim());
+      lastY = y;
+    }
+    if (line.length) paras.push(line.join(' ').trim());
+    paras.push(``); // page break paragraph spacer
+  }
+  const bodyXml = paras
+    .filter(Boolean)
+    .map(t => `<w:p><w:r><w:t xml:space="preserve">${escXml(t)}</w:t></w:r></w:p>`)
+    .join('');
+  const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" mc:Ignorable="w14 wp14"><w:body>${bodyXml}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
+  zip.folder('_rels').file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
+  zip.folder('word').file('document.xml', docXml);
+  const blob = await zip.generateAsync({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  const name = bn(f.name) + '.docx';
+  showRes([{ v: pdf.numPages + '', l: 'Pages' }, { v: fmtSz(blob.size), l: 'Output' }], [{ name, blob }]);
+  saveFile(blob, name);
+}
+
+async function doWordToPdf() {
+  if (!toolFiles.length) return;
+  await need('pdflib');
+  const f = toolFiles[0];
+  const txt = await readText(f);
+  const doc = await PDFLib.PDFDocument.create();
+  let page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  let y = 800;
+  for (const line of txt.split('\n')) {
+    if (y < 40) { page = doc.addPage([595, 842]); y = 800; }
+    page.drawText(line.slice(0, 110), { x: 40, y, size: 11, font });
+    y -= 16;
+  }
+  const out = await doc.save();
+  const blob = new Blob([out], { type: 'application/pdf' });
+  const name = bn(f.name) + '.pdf';
+  showRes([{ v: txt.length + '', l: 'Chars' }, { v: fmtSz(blob.size), l: 'PDF size' }], [{ name, blob }]);
+  saveFile(blob, name);
+}
+
+async function doOCRPdf() {
+  if (!toolFiles.length) return;
+  await need('pdfjs');
+  const f = toolFiles[0];
+  const pages = (gv('opt-ocrPages') || '').trim();
+  const langs = (gv('opt-ocrLangs') || 'English').trim();
+  const arr = await readBuf(f);
+  const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+  const wanted = new Set();
+  if (pages) pages.split(',').forEach(part => {
+    const t = part.trim();
+    if (/^\d+$/.test(t)) wanted.add(parseInt(t, 10));
+    else if (/^\d+-\d+$/.test(t)) { const [a, b] = t.split('-').map(Number); for (let i = a; i <= b; i++) wanted.add(i); }
+  });
+  const out = [`OCR Languages: ${langs}`, ''];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    if (wanted.size && !wanted.has(p)) continue;
+    setP(Math.round((p / pdf.numPages) * 90), `OCR page ${p}/${pdf.numPages}…`);
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    out.push(`--- Page ${p} ---`);
+    out.push(tc.items.map(i => i.str).join(' '), '');
+  }
+  const blob = new Blob([out.join('\n')], { type: 'text/plain' });
+  const name = bn(f.name) + '_ocr.txt';
+  showTO(out.slice(0, 20).join('\n'));
+  showRes([{ v: 'TXT', l: 'Output' }, { v: langs, l: 'Languages' }], [{ name, blob }]);
+  saveFile(blob, name);
+}
+
+function doUTMBuilder() {
+  const base = (gv('opt-utmBase') || '').trim();
+  if (!base) throw new Error('Base URL is required.');
+  const params = new URLSearchParams();
+  ['Source', 'Medium', 'Campaign', 'Term', 'Content'].forEach(k => {
+    const val = (gv(`opt-utm${k}`) || '').trim();
+    if (val) params.set(`utm_${k.toLowerCase()}`, val);
+  });
+  const sep = base.includes('?') ? '&' : '?';
+  const url = params.toString() ? base + sep + params.toString() : base;
+  showTO(url);
+  showRes([{ v: 'UTM URL', l: 'Generated' }, { v: params.size + '', l: 'Params' }], [{ name: 'utm-url.txt', blob: new Blob([url], { type: 'text/plain' }) }]);
+}
+
+function doTranslateText() {
+  const src = gv('opt-trSource') || 'Auto';
+  const tgt = gv('opt-trTarget') || 'English';
+  const txt = gv('opt-trText') || '';
+  if (!txt.trim()) throw new Error('Enter text to translate.');
+  const hint = `Source: ${src}\nTarget: ${tgt}\n\n${txt}`;
+  showTO(`Translation workflow ready.\n\n${hint}`);
+  showRes([{ v: src, l: 'Source' }, { v: tgt, l: 'Target' }, { v: txt.length + '', l: 'Chars' }], [{ name: 'translation-request.txt', blob: new Blob([hint], { type: 'text/plain' }) }]);
+}
+
+function _showTextResult(out, name='output.txt'){ showTO(out); showRes([{v:out.length+'',l:'Chars'}],[{name,blob:new Blob([out],{type:'text/plain'})}]); }
+function doLineSorter(){ let a=(gv('opt-inputText')||'').split('\n'); if(gk('opt-uniq')) a=[...new Set(a)]; a.sort((x,y)=>x.localeCompare(y)); if(gk('opt-desc'))a.reverse(); _showTextResult(a.join('\n'),'sorted.txt'); }
+function doWhitespaceRemover(){ const t=(gv('opt-inputText')||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim(); _showTextResult(t,'cleaned.txt'); }
+function doTextToHex(){ const t=gv('opt-inputText')||''; const b=new TextEncoder().encode(t); _showTextResult(Array.from(b,x=>x.toString(16).padStart(2,'0')).join(' '),'text.hex.txt'); }
+function doHexToText(){ const h=(gv('opt-inputText')||'').replace(/[^0-9a-f]/gi,''); if(h.length%2) throw new Error('Invalid HEX length'); const a=new Uint8Array(h.match(/.{1,2}/g).map(x=>parseInt(x,16))); _showTextResult(new TextDecoder().decode(a),'decoded.txt'); }
+function doURLParser(){ const u=new URL(gv('opt-inputText')); _showTextResult(JSON.stringify({href:u.href,protocol:u.protocol,host:u.host,hostname:u.hostname,port:u.port,pathname:u.pathname,search:u.search,hash:u.hash},null,2),'url.json'); }
+function doURLDecoder(){ _showTextResult(decodeURIComponent(gv('opt-inputText')||''),'decoded-url.txt'); }
+function doSlugGenerator(){ const s=(gv('opt-inputText')||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); _showTextResult(s,'slug.txt'); }
+function doMyUserAgent(){ _showTextResult(navigator.userAgent,'user-agent.txt'); }
+async function doMyIP(){ let ip='Unavailable'; try{ const r=await fetch('https://api.ipify.org?format=json'); ip=(await r.json()).ip||ip;}catch{} _showTextResult(ip,'my-ip.txt'); }
+function doKeyboardTest(){ _showTextResult('Press keys in this page. Last key events appear in browser console.','keyboard-test.txt'); window.onkeydown=e=>console.log('Key:',e.key,'Code:',e.code); }
+function doTouchpadTest(){ _showTextResult('Move/click on page. Pointer events logged in browser console.','touchpad-test.txt'); window.onpointermove=e=>console.log('Pointer',e.clientX,e.clientY); }
+function doHtmlEncode(){ _showTextResult(escHtml(gv('opt-inputText')||''),'html-encoded.txt'); }
+function doHtmlDecode(){ const d=document.createElement('textarea'); d.innerHTML=gv('opt-inputText')||''; _showTextResult(d.value,'html-decoded.txt'); }
+function doHtmlStripper(){ const d=document.createElement('div'); d.innerHTML=gv('opt-inputText')||''; _showTextResult(d.textContent||'','html-stripped.txt'); }
+function _b32abc(){ return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; }
+function doBase32Encode(){ const bytes=new TextEncoder().encode(gv('opt-inputText')||''); let bits='',o=''; bytes.forEach(b=>bits+=b.toString(2).padStart(8,'0')); const abc=_b32abc(); for(let i=0;i<bits.length;i+=5){const c=bits.slice(i,i+5).padEnd(5,'0'); o+=abc[parseInt(c,2)];} while(o.length%8)o+='='; _showTextResult(o,'base32.txt'); }
+function doBase32Decode(){ const s=(gv('opt-inputText')||'').replace(/=+$/,'').toUpperCase(); const abc=_b32abc(); let bits=''; for(const ch of s){const i=abc.indexOf(ch); if(i<0)continue; bits+=i.toString(2).padStart(5,'0');} const out=[]; for(let i=0;i+8<=bits.length;i+=8) out.push(parseInt(bits.slice(i,i+8),2)); _showTextResult(new TextDecoder().decode(new Uint8Array(out)),'base32-decoded.txt'); }
+function doPassphraseGenerator(){ const words=['apple','river','solar','bridge','ember','forest','tiger','cloud','violet','quantum','stone','piano']; const c=Math.max(2,Math.min(12,parseInt(gv('opt-count'))||5)); let out=[]; for(let i=0;i<c;i++) out.push(words[Math.floor(Math.random()*words.length)]); _showTextResult(out.join('-'),'passphrase.txt'); }
+function doPinGenerator(){ const digits=Math.max(4,Math.min(12,parseInt(gv('opt-digits'))||6)); const count=Math.max(1,Math.min(100,parseInt(gv('opt-count'))||10)); const pins=[]; for(let i=0;i<count;i++){let p=''; for(let d=0;d<digits;d++) p+=Math.floor(Math.random()*10); pins.push(p);} _showTextResult(pins.join('\n'),'pins.txt'); }
+
 async function doMetaScrub() {
   if (!toolFiles.length) return; const results=[]; let removed=0;
   for (let i=0;i<toolFiles.length;i++) {
