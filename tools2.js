@@ -313,61 +313,485 @@ async function doPdfToWord() {
   if (!toolFiles.length) return;
   await need('pdfjs');
   await need('jszip');
+
   const f = toolFiles[0];
   const arr = await readBuf(f);
   const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
-  const escXml = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const paras = [];
-  for (let p = 1; p <= pdf.numPages; p++) {
-    setP(Math.round((p / pdf.numPages) * 85), `Extracting page ${p}/${pdf.numPages}…`);
-    const page = await pdf.getPage(p);
-    const tc = await page.getTextContent();
-    let line = [];
-    let lastY = null;
-    for (const it of tc.items) {
-      const y = Math.round(it.transform?.[5] || 0);
-      if (lastY !== null && Math.abs(y - lastY) > 3) {
-        if (line.length) paras.push(line.join(' ').trim());
-        line = [];
-      }
-      line.push((it.str || '').trim());
-      lastY = y;
+  const mode = gv('opt-convMode') || 'Visual (Exact Layout)';
+  const scale = parseFloat((gv('opt-quality') || '2').match(/\d+(\.\d+)?/)?.[0] || '2');
+  const escXml = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+
+  // EMU helpers: 1 inch = 914400 EMU = 72 PDF points
+  const PT2EMU = 914400 / 72; // 12700 EMU per PDF point
+  const pt2emu = v => Math.round(v * PT2EMU);
+
+  // ── SHARED DOCX SCAFFOLDING ───────────────────────────────────────
+  const makeZip = (wordFolder, bodyXml, extraContentTypes = '', extraRels = '', noSectPr = false) => {
+    const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr>
+      <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Arial"/>
+      <w:sz w:val="22"/><w:szCs w:val="22"/>
+    </w:rPr></w:rPrDefault>
+    <w:pPrDefault><w:pPr><w:spacing w:after="0"/></w:pPr></w:pPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr>
+  </w:style>
+</w:styles>`;
+
+    const settingsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:defaultTabStop w:val="708"/>
+  <w:characterSpacingControl w:val="doNotCompress"/>
+</w:settings>`;
+
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+  ${extraContentTypes}
+</Types>`);
+
+    zip.folder('_rels').file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+
+    const wf = zip.folder('word');
+    wf.file('document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+  xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  mc:Ignorable="w14">
+  <w:body>${bodyXml}${noSectPr ? '' : `
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>`}
+  </w:body>
+</w:document>`);
+    wf.file('styles.xml', stylesXml);
+    wf.file('settings.xml', settingsXml);
+    wf.folder('_rels').file('document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+  ${extraRels}
+</Relationships>`);
+
+    if (wordFolder) {
+      Object.entries(wordFolder).forEach(([path, data]) => zip.file(path, data));
     }
-    if (line.length) paras.push(line.join(' ').trim());
-    paras.push('');
+    return zip;
+  };
+
+  // ══════════════════════════════════════════════════════════════════
+  // MODE 1: VISUAL — full-page PNG as background anchor image
+  // ══════════════════════════════════════════════════════════════════
+  if (mode === 'Visual (Exact Layout)') {
+    const images = [];
+
+    for (let p = 1; p <= pdf.numPages; p++) {
+      setP(Math.round(5 + (p / pdf.numPages) * 82), `Rendering page ${p}/${pdf.numPages}…`);
+      const page = await pdf.getPage(p);
+      const vpBase = page.getViewport({ scale: 1 });
+      const pgWTwips = Math.round(vpBase.width * 20);
+      const pgHTwips = Math.round(vpBase.height * 20);
+      const widthEmu  = pt2emu(vpBase.width);
+      const heightEmu = pt2emu(vpBase.height);
+
+      const vp = page.getViewport({ scale });
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      const pngBuf = await (await new Promise(res => cv.toBlob(res, 'image/png'))).arrayBuffer();
+      images.push({ id: p, pngBuf, widthEmu, heightEmu, pgWTwips, pgHTwips });
+    }
+
+    setP(88, 'Building DOCX…');
+    let bodyXml = '';
+    const relEntries = [], mediaFiles = {};
+
+    for (const img of images) {
+      const rId = `rId${img.id + 2}`;
+      const imgName = `media/page${img.id}.png`;
+      relEntries.push(`<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${imgName}"/>`);
+      mediaFiles[`word/${imgName}`] = img.pngBuf;
+
+      const isLast = img.id === images.length;
+      const sectPrXml = `<w:sectPr><w:pgSz w:w="${img.pgWTwips}" w:h="${img.pgHTwips}"/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>`;
+      const anchorXml = `<wp:anchor distT="0" distB="0" distL="0" distR="0" allowOverlap="1" layoutInCell="1" locked="0" behindDoc="1" simplePos="0" relativeHeight="1">
+            <wp:simplePos x="0" y="0"/>
+            <wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>
+            <wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>
+            <wp:extent cx="${img.widthEmu}" cy="${img.heightEmu}"/>
+            <wp:effectExtent l="0" t="0" r="0" b="0"/>
+            <wp:wrapNone/>
+            <wp:docPr id="${img.id}" name="Page${img.id}"/>
+            <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+            <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+              <pic:pic><pic:nvPicPr>
+                <pic:cNvPr id="${img.id}" name="Page${img.id}"/>
+                <pic:cNvPicPr><a:picLocks noChangeAspect="1" noChangeArrowheads="1"/></pic:cNvPicPr>
+              </pic:nvPicPr>
+              <pic:blipFill><a:blip r:embed="${rId}" cstate="print"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+              <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${img.widthEmu}" cy="${img.heightEmu}"/></a:xfrm>
+                <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
+              </pic:pic>
+            </a:graphicData></a:graphic>
+          </wp:anchor>`;
+
+      if (isLast) {
+        bodyXml += `\n    <w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:rPr><w:noProof/></w:rPr><w:drawing>${anchorXml}</w:drawing></w:r></w:p>`;
+        bodyXml += `\n    <w:sectPr><w:pgSz w:w="${img.pgWTwips}" w:h="${img.pgHTwips}"/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>`;
+      } else {
+        bodyXml += `\n    <w:p><w:pPr><w:spacing w:before="0" w:after="0"/>${sectPrXml}</w:pPr><w:r><w:rPr><w:noProof/></w:rPr><w:drawing>${anchorXml}</w:drawing></w:r></w:p>`;
+      }
+    }
+
+    const zip = makeZip(mediaFiles, bodyXml, '', relEntries.join('\n'), true);
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const name = bn(f.name) + '.docx';
+    showRes([{ v: pdf.numPages + '', l: 'Pages' }, { v: 'Visual', l: 'Mode' }, { v: fmtSz(blob.size), l: 'Output' }], [{ name, blob }]);
+    saveFile(blob, name);
+    return;
   }
-  const bodyXml = paras.filter(Boolean).map(t => `<w:p><w:r><w:t xml:space="preserve">${escXml(t)}</w:t></w:r></w:p>`).join('');
-  const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" mc:Ignorable="w14 wp14"><w:body>${bodyXml}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
-  const zip = new JSZip();
-  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
-  zip.folder('_rels').file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
-  zip.folder('word').file('document.xml', docXml);
-  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+
+  // ══════════════════════════════════════════════════════════════════
+  // MODE 2: EDITABLE — reconstruct text + images as positioned Word objects
+  // Each PDF page → one DOCX page, background PNG + floating text boxes
+  // ══════════════════════════════════════════════════════════════════
+  const allPageData = [];
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    setP(Math.round(5 + (p / pdf.numPages) * 78), `Extracting page ${p}/${pdf.numPages}…`);
+    const page = await pdf.getPage(p);
+    const vpBase = page.getViewport({ scale: 1 });
+    const pgW = vpBase.width;   // PDF points, unscaled
+    const pgH = vpBase.height;
+
+    // ── Render page as background image ──────────────────────────────
+    const vp = page.getViewport({ scale });
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const bgPngBuf = await (await new Promise(res => cv.toBlob(res, 'image/png'))).arrayBuffer();
+
+    // ── Extract text items ────────────────────────────────────────────
+    const tc = await page.getTextContent({ includeMarkedContent: false });
+    const opList = await page.getOperatorList();
+
+    // Group items into lines (same Y ± 2pt, same font/size/color)
+    // Each item: { str, x, y, w, h, fontSize, fontName, color }
+    const items = [];
+    for (const it of tc.items) {
+      if (!it.str) continue;
+      const [, , , scaleY, tx, ty] = it.transform;
+      const fontSize = Math.abs(scaleY);
+      if (fontSize < 1) continue;
+      items.push({
+        str: it.str,
+        x: tx,
+        y: pgH - ty - fontSize,   // flip Y: PDF origin bottom-left → top-left
+        w: it.width || 0,
+        h: it.height || fontSize,
+        fontSize,
+        fontName: it.fontName || '',
+      });
+    }
+
+    // Sort top→bottom, left→right
+    items.sort((a, b) => a.y - b.y || a.x - b.x);
+
+    // Cluster nearby items into text groups (same approximate line + proximity)
+    const groups = [];
+    for (const it of items) {
+      // Find an existing group this item belongs to (close Y, close X continuation)
+      let placed = false;
+      for (const g of groups) {
+        const last = g.items[g.items.length - 1];
+        if (Math.abs(it.y - g.baseY) < g.fontSize * 0.6 &&
+            it.x >= last.x + last.w - 2 &&
+            it.x <= last.x + last.w + last.fontSize * 3) {
+          g.items.push(it);
+          g.maxX = Math.max(g.maxX, it.x + it.w);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        groups.push({
+          items: [it],
+          baseY: it.y,
+          baseX: it.x,
+          maxX: it.x + it.w,
+          fontSize: it.fontSize,
+          fontName: it.fontName,
+        });
+      }
+    }
+
+    allPageData.push({ pgW, pgH, bgPngBuf, groups });
+  }
+
+  setP(88, 'Building DOCX…');
+
+  let bodyXml = '';
+  const relEntries = [];
+  const mediaFiles = {};
+  let rIdCounter = 3;
+  let shapeIdCounter = 1000;
+
+  for (let pi = 0; pi < allPageData.length; pi++) {
+    const { pgW, pgH, bgPngBuf, groups } = allPageData[pi];
+    const isLast = pi === allPageData.length - 1;
+
+    const pgWTwips = Math.round(pgW * 20);
+    const pgHTwips = Math.round(pgH * 20);
+    const pgWEmu   = pt2emu(pgW);
+    const pgHEmu   = pt2emu(pgH);
+
+    // ── Background image relationship ──────────────────────────────
+    const bgRId = `rId${rIdCounter++}`;
+    const bgName = `media/bg${pi + 1}.png`;
+    relEntries.push(`<Relationship Id="${bgRId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${bgName}"/>`);
+    mediaFiles[`word/${bgName}`] = bgPngBuf;
+
+    const bgId = shapeIdCounter++;
+    const bgAnchor = `<wp:anchor distT="0" distB="0" distL="0" distR="0" allowOverlap="1" layoutInCell="1" locked="0" behindDoc="1" simplePos="0" relativeHeight="1">
+      <wp:simplePos x="0" y="0"/>
+      <wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>
+      <wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>
+      <wp:extent cx="${pgWEmu}" cy="${pgHEmu}"/>
+      <wp:effectExtent l="0" t="0" r="0" b="0"/>
+      <wp:wrapNone/>
+      <wp:docPr id="${bgId}" name="BG${pi+1}"/>
+      <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+        <pic:pic><pic:nvPicPr>
+          <pic:cNvPr id="${bgId}" name="BG${pi+1}"/>
+          <pic:cNvPicPr><a:picLocks noChangeAspect="1" noChangeArrowheads="1"/></pic:cNvPicPr>
+        </pic:nvPicPr>
+        <pic:blipFill><a:blip r:embed="${bgRId}" cstate="print"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+        <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${pgWEmu}" cy="${pgHEmu}"/></a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
+        </pic:pic>
+      </a:graphicData></a:graphic>
+    </wp:anchor>`;
+
+    // ── Text boxes: one floating wps:wsp per text group ─────────────
+    let textBoxDrawings = '';
+
+    for (const g of groups) {
+      if (!g.items.length) continue;
+      const text = g.items.map(i => i.str).join('');
+      if (!text.trim()) continue;
+
+      // Position & size in EMU
+      const xEmu = pt2emu(g.baseX);
+      const yEmu = pt2emu(g.baseY);
+      // Width: span of the group + small padding
+      const boxW = Math.max(pt2emu(g.maxX - g.baseX) + pt2emu(10), pt2emu(20));
+      // Height: 1.5× line height
+      const boxH = pt2emu(g.fontSize * 1.6);
+
+      // Font size in half-points (Word unit)
+      const szHp = Math.max(8, Math.round(g.fontSize * 2));
+
+      // Detect bold/italic from font name
+      const fn = g.fontName.toLowerCase();
+      const bold    = /bold|black|heavy/.test(fn) ? '<a:b/>' : '';
+      const italic  = /italic|oblique/.test(fn) ? '<a:i/>' : '';
+      const fontFam = /times|serif/.test(fn) ? 'Times New Roman' : /courier|mono/.test(fn) ? 'Courier New' : 'Calibri';
+
+      // Escape text
+      const safeText = escXml(text);
+
+      const shpId = shapeIdCounter++;
+
+      textBoxDrawings += `<wp:anchor distT="0" distB="0" distL="0" distR="0"
+        allowOverlap="1" layoutInCell="1" locked="0" behindDoc="0" simplePos="0" relativeHeight="${shpId}">
+        <wp:simplePos x="0" y="0"/>
+        <wp:positionH relativeFrom="page"><wp:posOffset>${xEmu}</wp:posOffset></wp:positionH>
+        <wp:positionV relativeFrom="page"><wp:posOffset>${yEmu}</wp:posOffset></wp:positionV>
+        <wp:extent cx="${boxW}" cy="${boxH}"/>
+        <wp:effectExtent l="0" t="0" r="0" b="0"/>
+        <wp:wrapNone/>
+        <wp:docPr id="${shpId}" name="T${shpId}"/>
+        <wp:cNvGraphicFramePr/>
+        <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+          <wps:wsp>
+            <wps:cNvPr id="${shpId}" name="T${shpId}"/>
+            <wps:cNvSpPr txBx="1"/>
+            <wps:spPr>
+              <a:xfrm><a:off x="0" y="0"/><a:ext cx="${boxW}" cy="${boxH}"/></a:xfrm>
+              <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+              <a:noFill/>
+              <a:ln><a:noFill/></a:ln>
+            </wps:spPr>
+            <wps:txbx>
+              <w:txbxContent>
+                <w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>
+                  <w:r><w:rPr>
+                    <w:rFonts w:ascii="${fontFam}" w:hAnsi="${fontFam}"/>
+                    <w:sz w:val="${szHp}"/><w:szCs w:val="${szHp}"/>
+                    ${bold ? '<w:b/><w:bCs/>' : ''}${italic ? '<w:i/><w:iCs/>' : ''}
+                    <w:noProof/>
+                  </w:rPr>
+                  <w:t xml:space="preserve">${safeText}</w:t></w:r>
+                </w:p>
+              </w:txbxContent>
+            </wps:txbx>
+            <wps:bodyPr insFocus="0" anchor="t">
+              <a:noAutofit/>
+            </wps:bodyPr>
+          </wps:wsp>
+        </a:graphicData></a:graphic>
+      </wp:anchor>`;
+    }
+
+    // ── Assemble the page paragraph ─────────────────────────────────
+    const sectPrXml = `<w:sectPr><w:pgSz w:w="${pgWTwips}" w:h="${pgHTwips}"/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>`;
+
+    // Background image run (one drawing per run — DOCX requirement)
+    // textBoxDrawings already contains individual <wp:anchor> blocks, each wrapped in its own run below
+    const bgRun = `<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>${bgAnchor}</w:drawing></w:r>`;
+    // Wrap each text-box anchor in its own <w:r><w:drawing>…</w:drawing></w:r>
+    const tbRuns = textBoxDrawings
+      .split(/(?=<wp:anchor)/)
+      .filter(s => s.trim().startsWith('<wp:anchor'))
+      .map(anchor => `<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>${anchor}</w:drawing></w:r>`)
+      .join('');
+    const paraContent = bgRun + tbRuns;
+
+    if (isLast) {
+      bodyXml += `\n    <w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>${paraContent}</w:p>`;
+      bodyXml += `\n    ${sectPrXml}`;
+    } else {
+      bodyXml += `\n    <w:p><w:pPr><w:spacing w:before="0" w:after="0"/>${sectPrXml}</w:pPr>${paraContent}</w:p>`;
+    }
+  }
+
+  const zip = makeZip(mediaFiles, bodyXml, '', relEntries.join('\n'), true);
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
   const name = bn(f.name) + '.docx';
-  showRes([{ v: pdf.numPages + '', l: 'Pages' }, { v: fmtSz(blob.size), l: 'Output' }], [{ name, blob }]);
+  const wordCount = allPageData.reduce((n, pg) => n + pg.groups.reduce((m, g) => m + g.items.map(i=>i.str).join('').split(/\s+/).length, 0), 0);
+  showRes([
+    { v: pdf.numPages + '', l: 'Pages' },
+    { v: wordCount.toLocaleString(), l: 'Words' },
+    { v: fmtSz(blob.size), l: 'Output' }
+  ], [{ name, blob }]);
   saveFile(blob, name);
 }
+
 
 
 async function doWordToPdf() {
   if (!toolFiles.length) return;
   await need('pdflib');
+  await need('jszip');
   const f = toolFiles[0];
-  const txt = await readText(f);
-  const doc = await PDFLib.PDFDocument.create();
-  let page = doc.addPage([595, 842]);
-  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
-  let y = 800;
-  for (const line of txt.split('\n')) {
-    if (y < 40) { page = doc.addPage([595, 842]); y = 800; }
-    page.drawText(line.slice(0, 110), { x: 40, y, size: 11, font });
-    y -= 16;
+
+  // Extract text from .docx (ZIP containing XML) or fall back to plain text
+  let lines = [];
+  const isDOCX = f.name.toLowerCase().endsWith('.docx') || f.name.toLowerCase().endsWith('.doc');
+  if (isDOCX) {
+    try {
+      const buf = await readBuf(f);
+      const zip = await JSZip.loadAsync(buf);
+      const docFile = zip.file('word/document.xml');
+      if (!docFile) throw new Error('Not a valid DOCX file.');
+      const xmlStr = await docFile.async('string');
+      // Strip XML tags, preserve paragraph breaks
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlStr, 'application/xml');
+      const paras = xmlDoc.querySelectorAll('p');
+      lines = Array.from(paras).map(p => {
+        // w:t elements hold actual text; w:br is a line break
+        return Array.from(p.querySelectorAll('t')).map(t => t.textContent).join('');
+      }).filter(l => l.trim() !== '' || true); // keep blanks for spacing
+    } catch(e) {
+      throw new Error('Could not read DOCX file: ' + e.message + '. Make sure it is a valid Word document.');
+    }
+  } else {
+    const txt = await readText(f);
+    lines = txt.split('\n');
   }
+
+  const doc = await PDFLib.PDFDocument.create();
+  const fontB = await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const fontR = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const PW = 595, PH = 842, ML = 50, MR = 50, MT = 60, MB = 50;
+  const maxW = PW - ML - MR;
+
+  // Word-wrap helper
+  const wrapLine = (text, font, size) => {
+    if (!text.trim()) return [''];
+    const words = text.split(' ');
+    const result = [];
+    let cur = '';
+    for (const w of words) {
+      const test = cur ? cur + ' ' + w : w;
+      if (font.widthOfTextAtSize(test, size) > maxW) {
+        if (cur) result.push(cur);
+        // Handle a single word longer than maxW
+        let remaining = w;
+        while (font.widthOfTextAtSize(remaining, size) > maxW) {
+          let cutAt = remaining.length - 1;
+          while (cutAt > 0 && font.widthOfTextAtSize(remaining.slice(0, cutAt), size) > maxW) cutAt--;
+          result.push(remaining.slice(0, cutAt));
+          remaining = remaining.slice(cutAt);
+        }
+        cur = remaining;
+      } else {
+        cur = test;
+      }
+    }
+    if (cur) result.push(cur);
+    return result.length ? result : [''];
+  };
+
+  let page = doc.addPage([PW, PH]);
+  let y = PH - MT;
+  let totalChars = 0;
+
+  for (const rawLine of lines) {
+    const isHeading = isDOCX && rawLine.length < 80 && rawLine === rawLine.trimEnd() && /^[A-Z0-9]/.test(rawLine) && !rawLine.endsWith(',') && rawLine.trim().split(/\s+/).length < 10;
+    const font = isHeading ? fontB : fontR;
+    const size = isHeading ? 14 : 11;
+    const lineH = size * 1.6;
+    const spaceAfter = isHeading ? size : size * 0.4;
+
+    const wrapped = wrapLine(rawLine, font, size);
+    for (const wl of wrapped) {
+      if (y - lineH < MB) { page = doc.addPage([PW, PH]); y = PH - MT; }
+      if (wl.trim()) {
+        try { page.drawText(wl, { x: ML, y, size, font, color: PDFLib.rgb(0.07, 0.07, 0.12) }); } catch {}
+      }
+      y -= lineH;
+    }
+    y -= spaceAfter;
+    totalChars += rawLine.length;
+  }
+
   const out = await doc.save();
   const blob = new Blob([out], { type: 'application/pdf' });
   const name = bn(f.name) + '.pdf';
-  showRes([{ v: txt.length + '', l: 'Chars' }, { v: fmtSz(blob.size), l: 'PDF size' }], [{ name, blob }]);
+  showRes([{ v: doc.getPageCount() + '', l: 'Pages' }, { v: lines.length + '', l: 'Lines' }, { v: fmtSz(blob.size), l: 'PDF size' }], [{ name, blob }]);
   saveFile(blob, name);
 }
 
@@ -375,29 +799,67 @@ async function doOCRPdf() {
   if (!toolFiles.length) return;
   await need('pdfjs');
   const f = toolFiles[0];
-  const pages = (gv('opt-ocrPages') || '').trim();
-  const langs = (gv('opt-ocrLangs') || 'English').trim();
+  const pagesOpt = (gv('opt-ocrPages') || '').trim();
+  const outputFmt = gv('opt-ocrFmt') || 'Plain Text';
   const arr = await readBuf(f);
   const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
+
+  // Parse page ranges
   const wanted = new Set();
-  if (pages) pages.split(',').forEach(part => {
-    const t = part.trim();
-    if (/^\d+$/.test(t)) wanted.add(parseInt(t, 10));
-    else if (/^\d+-\d+$/.test(t)) { const [a, b] = t.split('-').map(Number); for (let i = a; i <= b; i++) wanted.add(i); }
-  });
-  const out = [`OCR Languages: ${langs}`, ''];
+  if (pagesOpt) {
+    pagesOpt.split(',').forEach(part => {
+      const t = part.trim();
+      if (/^\d+$/.test(t)) wanted.add(parseInt(t, 10));
+      else if (/^\d+-\d+$/.test(t)) { const [a, b] = t.split('-').map(Number); for (let i = a; i <= b; i++) wanted.add(i); }
+    });
+  }
+
+  const pageResults = [];
+  let totalWords = 0;
+  let hasText = false;
+
   for (let p = 1; p <= pdf.numPages; p++) {
     if (wanted.size && !wanted.has(p)) continue;
-    setP(Math.round((p / pdf.numPages) * 90), `OCR page ${p}/${pdf.numPages}…`);
+    setP(Math.round((p / pdf.numPages) * 90), `Extracting text from page ${p}/${pdf.numPages}…`);
     const page = await pdf.getPage(p);
     const tc = await page.getTextContent();
-    out.push(`--- Page ${p} ---`);
-    out.push(tc.items.map(i => i.str).join(' '), '');
+
+    // Group items by line (Y position with tolerance)
+    const lineMap = {};
+    for (const it of tc.items) {
+      if (!it.str) continue;
+      const y = Math.round((it.transform?.[5] || 0) * 2) / 2;
+      if (!lineMap[y]) lineMap[y] = [];
+      lineMap[y].push(it.str);
+    }
+    const ys = Object.keys(lineMap).map(Number).sort((a, b) => b - a);
+    const pageLines = ys.map(y => lineMap[y].join(' ').replace(/\s{2,}/g, ' ').trim()).filter(Boolean);
+    const pageText = pageLines.join('\n');
+    if (pageText.trim()) hasText = true;
+    totalWords += pageText.split(/\s+/).filter(Boolean).length;
+    pageResults.push({ page: p, text: pageText, lines: pageLines.length });
   }
-  const blob = new Blob([out.join('\n')], { type: 'text/plain' });
-  const name = bn(f.name) + '_ocr.txt';
-  showTO(out.slice(0, 20).join('\n'));
-  showRes([{ v: 'TXT', l: 'Output' }, { v: langs, l: 'Languages' }], [{ name, blob }]);
+
+  if (!hasText) {
+    throw new Error('No selectable text found in this PDF. This tool extracts embedded text — scanned/image-only PDFs require true OCR software (e.g. Adobe Acrobat, Tesseract).');
+  }
+
+  let output = '';
+  const pagesExtracted = pageResults.length;
+
+  if (outputFmt === 'Markdown') {
+    output = `# Extracted Text — ${f.name}\n\n`;
+    output += pageResults.map(r => `## Page ${r.page}\n\n${r.text}`).join('\n\n---\n\n');
+  } else {
+    output = `Text Extraction — ${f.name}\n${'─'.repeat(50)}\n\n`;
+    output += pageResults.map(r => `[Page ${r.page}]\n${r.text}`).join('\n\n' + '─'.repeat(40) + '\n\n');
+  }
+
+  const ext = outputFmt === 'Markdown' ? 'md' : 'txt';
+  const blob = new Blob([output], { type: 'text/plain' });
+  const name = bn(f.name) + '_extracted.' + ext;
+  showTO(output.substring(0, 2000) + (output.length > 2000 ? '\n…[preview truncated — download for full text]' : ''));
+  showRes([{ v: pagesExtracted + '', l: 'Pages' }, { v: totalWords.toLocaleString(), l: 'Words' }, { v: fmtSz(blob.size), l: 'Output' }], [{ name, blob }]);
   saveFile(blob, name);
 }
 
@@ -415,36 +877,293 @@ function doUTMBuilder() {
   showRes([{ v: 'UTM URL', l: 'Generated' }, { v: params.size + '', l: 'Params' }], [{ name: 'utm-url.txt', blob: new Blob([url], { type: 'text/plain' }) }]);
 }
 
-function doTranslateText() {
+async function doTranslateText() {
   const src = gv('opt-trSource') || 'Auto';
-  const tgt = gv('opt-trTarget') || 'English';
-  const txt = gv('opt-trText') || '';
-  if (!txt.trim()) throw new Error('Enter text to translate.');
-  const hint = `Source: ${src}\nTarget: ${tgt}\n\n${txt}`;
-  showTO(`Translation workflow ready.\n\n${hint}`);
-  showRes([{ v: src, l: 'Source' }, { v: tgt, l: 'Target' }, { v: txt.length + '', l: 'Chars' }], [{ name: 'translation-request.txt', blob: new Blob([hint], { type: 'text/plain' }) }]);
+  const tgt = gv('opt-trTarget') || 'Spanish';
+  const txt = (gv('opt-trText') || '').trim();
+  if (!txt) throw new Error('Enter text to translate.');
+
+  setP(10, 'Connecting…');
+  const tout = document.getElementById('tout');
+  const wrap = document.getElementById('tout-wrap');
+  if (wrap) wrap.classList.add('show');
+  if (tout) { tout.className = 'tout'; tout.textContent = 'Translating…'; }
+
+  const srcLabel = src === 'Auto' ? 'the source language (auto-detect)' : src;
+  const prompt = `Translate the following text from ${srcLabel} to ${tgt}. Output ONLY the translated text with no explanation, no preamble, and no quotes.\n\nText to translate:\n${txt}`;
+
+  try {
+    setP(30, 'Translating…');
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    if (!res.ok) throw new Error('API error ' + res.status);
+    const data = await res.json();
+    const translated = (data.content || []).map(b => b.text || '').join('').trim();
+    if (!translated) throw new Error('No translation returned.');
+    setP(90, 'Done');
+    if (tout) { tout.className = 'tout'; tout.textContent = translated; }
+    const blob = new Blob([translated], { type: 'text/plain' });
+    showRes([{ v: src, l: 'From' }, { v: tgt, l: 'To' }, { v: txt.split(/\s+/).length + '', l: 'Words' }], [{ name: 'translation.txt', blob }]);
+    saveFile(blob, 'translation.txt');
+  } catch (e) {
+    if (tout) { tout.className = 'tout'; tout.textContent = ''; }
+    throw new Error('Translation failed: ' + e.message + '. Check your internet connection.');
+  }
 }
 
 function _showTextResult(out, name='output.txt'){ showTO(out); showRes([{v:out.length+'',l:'Chars'}],[{name,blob:new Blob([out],{type:'text/plain'})}]); }
 function doLineSorter(){ let a=(gv('opt-inputText')||'').split('\n'); if(gk('opt-uniq')) a=[...new Set(a)]; a.sort((x,y)=>x.localeCompare(y)); if(gk('opt-desc'))a.reverse(); _showTextResult(a.join('\n'),'sorted.txt'); }
 function doWhitespaceRemover(){ const t=(gv('opt-inputText')||'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim(); _showTextResult(t,'cleaned.txt'); }
 function doTextToHex(){ const t=gv('opt-inputText')||''; const b=new TextEncoder().encode(t); _showTextResult(Array.from(b,x=>x.toString(16).padStart(2,'0')).join(' '),'text.hex.txt'); }
-function doHexToText(){ const h=(gv('opt-inputText')||'').replace(/[^0-9a-f]/gi,''); if(h.length%2) throw new Error('Invalid HEX length'); const a=new Uint8Array(h.match(/.{1,2}/g).map(x=>parseInt(x,16))); _showTextResult(new TextDecoder().decode(a),'decoded.txt'); }
-function doURLParser(){ const u=new URL(gv('opt-inputText')); _showTextResult(JSON.stringify({href:u.href,protocol:u.protocol,host:u.host,hostname:u.hostname,port:u.port,pathname:u.pathname,search:u.search,hash:u.hash},null,2),'url.json'); }
-function doURLDecoder(){ _showTextResult(decodeURIComponent(gv('opt-inputText')||''),'decoded-url.txt'); }
+function doHexToText(){
+  const raw=gv('opt-inputText')||'';
+  if(!raw.trim())throw new Error('Enter hex characters to decode.');
+  const h=raw.replace(/\s+/g,'').replace(/^0x/i,'');
+  if(!/^[0-9a-fA-F]*$/.test(h))throw new Error('Input contains non-hex characters. Only 0-9 and A-F are allowed.');
+  if(h.length%2)throw new Error('Hex string has an odd number of characters. Each byte needs 2 hex digits.');
+  try{
+    const a=new Uint8Array(h.match(/.{1,2}/g).map(x=>parseInt(x,16)));
+    _showTextResult(new TextDecoder().decode(a),'decoded.txt');
+  }catch(e){ throw new Error('Decode failed: '+e.message); }
+}
+function doURLParser(){
+  const raw=(gv('opt-inputText')||'').trim();
+  if(!raw)throw new Error('Enter a URL to parse.');
+  let u;
+  try{ u=new URL(raw.includes('://')?raw:'https://'+raw); }
+  catch(e){ throw new Error('Invalid URL: '+e.message); }
+  const params={};
+  u.searchParams.forEach((v,k)=>params[k]=v);
+  const result={href:u.href,protocol:u.protocol,host:u.host,hostname:u.hostname,port:u.port||'(default)',pathname:u.pathname,search:u.search,hash:u.hash,params:Object.keys(params).length?params:'(none)'};
+  _showTextResult(JSON.stringify(result,null,2),'url-parsed.json');
+}
+function doURLDecoder(){
+  const raw=gv('opt-inputText')||'';
+  if(!raw.trim())throw new Error('Enter a URL-encoded string to decode.');
+  try{ _showTextResult(decodeURIComponent(raw),'decoded-url.txt'); }
+  catch(e){ throw new Error('Invalid URL encoding: '+e.message); }
+}
 function doSlugGenerator(){ const s=(gv('opt-inputText')||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,''); _showTextResult(s,'slug.txt'); }
-function doMyUserAgent(){ _showTextResult(navigator.userAgent,'user-agent.txt'); }
-async function doMyIP(){ let ip='Unavailable'; try{ const r=await fetch('https://api.ipify.org?format=json'); ip=(await r.json()).ip||ip;}catch{} _showTextResult(ip,'my-ip.txt'); }
-function doKeyboardTest(){ _showTextResult('Press keys in this page. Last key events appear in browser console.','keyboard-test.txt'); window.onkeydown=e=>console.log('Key:',e.key,'Code:',e.code); }
-function doTouchpadTest(){ _showTextResult('Move/click on page. Pointer events logged in browser console.','touchpad-test.txt'); window.onpointermove=e=>console.log('Pointer',e.clientX,e.clientY); }
+function doMyUserAgent(){
+  const ua=navigator.userAgent;
+  const tout=document.getElementById('tout'),wrap=document.getElementById('tout-wrap');
+  if(wrap)wrap.classList.add('show');
+  // Parse common UA fields
+  const browser=ua.match(/(Chrome|Firefox|Safari|Edg|OPR|Opera|Brave)[\/ ](\d+)/)?.[0]||'Unknown';
+  const os=ua.includes('Windows')?'Windows':ua.includes('Mac OS X')?'macOS':ua.includes('Linux')?'Linux':ua.includes('Android')?'Android':ua.includes('iPhone')||ua.includes('iPad')?'iOS':'Unknown';
+  const mobile=/Mobi|Android|iPhone|iPad/i.test(ua);
+  const info=[['Full User-Agent',ua],['Browser',browser],['OS',os],['Mobile',mobile?'Yes':'No'],['Language',navigator.language],['Languages',(navigator.languages||[navigator.language]).join(', ')],['Platform',navigator.platform||'Unknown'],['Hardware Concurrency',navigator.hardwareConcurrency+' cores'],['Memory',(navigator.deviceMemory||'Unknown')+' GB (approx)'],['Touch',('ontouchstart' in window)?'Yes':'No'],['Do Not Track',navigator.doNotTrack||'Not set']];
+  if(tout){tout.className='tout';tout.innerHTML=`<div class="ts-grid">${info.map(([k,v])=>`<div class="ts-box"><label>${k}</label><div class="ts-val" style="word-break:break-all;font-size:11px">${v}</div></div>`).join('')}</div>`;}
+  const txt=info.map(([k,v])=>`${k}: ${v}`).join('\n');
+  const blob=new Blob([txt],{type:'text/plain'});
+  showRes([{v:browser,l:'Browser'},{v:os,l:'OS'},{v:mobile?'Mobile':'Desktop',l:'Device'}],[{name:'user-agent.txt',blob}]);
+}
+async function doMyIP(){
+  const tout=document.getElementById('tout'),wrap=document.getElementById('tout-wrap');
+  if(wrap)wrap.classList.add('show');
+  if(tout){tout.className='tout';tout.textContent='Detecting your IP…';}
+  let ip='Could not detect', source='';
+  const endpoints=[
+    {url:'https://api.ipify.org?format=json',parse:d=>d.ip},
+    {url:'https://api64.ipify.org?format=json',parse:d=>d.ip},
+  ];
+  for(const ep of endpoints){
+    try{const r=await fetch(ep.url,{signal:AbortSignal.timeout(5000)});const d=await r.json();ip=ep.parse(d)||'';source=ep.url;if(ip)break;}catch{}
+  }
+  const info=[['IP Address',ip],['User Agent',navigator.userAgent.substring(0,80)+(navigator.userAgent.length>80?'…':'')],['Language',navigator.language],['Platform',navigator.platform||navigator.userAgentData?.platform||'Unknown'],['Cookies enabled',navigator.cookieEnabled?'Yes':'No'],['Online',navigator.onLine?'Yes':'No'],['Screen',window.screen.width+'×'+window.screen.height],['Window',window.innerWidth+'×'+window.innerHeight]];
+  if(tout){tout.innerHTML=`<div class="ts-grid">${info.map(([k,v])=>`<div class="ts-box"><label>${k}</label><div class="ts-val" style="word-break:break-all">${v}</div></div>`).join('')}</div>`;}
+  const txt=info.map(([k,v])=>`${k}: ${v}`).join('\n');
+  _showTextResult(txt,'my-ip.txt');
+  showRes([{v:ip,l:'Your IP'},{v:navigator.language,l:'Language'}],[{name:'my-ip.txt',blob:new Blob([txt],{type:'text/plain'})}]);
+}
+function doKeyboardTest(){
+  const tout=document.getElementById('tout'),wrap=document.getElementById('tout-wrap');
+  if(wrap)wrap.classList.add('show');
+  if(!tout)return;
+  tout.className='tout';
+  tout.innerHTML=`<div id="kb-display" style="display:flex;flex-direction:column;gap:12px">
+    <div style="text-align:center;opacity:.6;padding:16px">Press any key to begin</div>
+    <div id="kb-log" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap" id="kb-held"></div>
+  </div>`;
+  const log=tout.querySelector('#kb-log');
+  const held=tout.querySelector('#kb-held');
+  const heldKeys=new Map();
+  const addEntry=(key,code,type)=>{
+    const el=document.createElement('div');
+    el.style.cssText='display:flex;gap:8px;align-items:center;padding:6px 10px;background:var(--b2,#f3f3f3);border-radius:8px;font-size:13px';
+    el.innerHTML=`<span style="opacity:.5;font-size:11px;min-width:70px">${type}</span><kbd style="background:var(--b3,#e5e5e5);padding:2px 8px;border-radius:5px;font-family:monospace">${key||'(blank)'}</kbd><span style="opacity:.4;font-size:11px">${code}</span>`;
+    log.prepend(el);
+    if(log.children.length>20)log.removeChild(log.lastChild);
+  };
+  window._kbDown=e=>{
+    e.preventDefault();
+    heldKeys.set(e.code,e.key);
+    held.innerHTML=Array.from(heldKeys.values()).map(k=>`<kbd style="background:var(--accent,#6c63ff);color:#fff;padding:3px 10px;border-radius:6px;font-family:monospace">${k}</kbd>`).join('');
+    addEntry(e.key,e.code,'keydown');
+  };
+  window._kbUp=e=>{
+    heldKeys.delete(e.code);
+    held.innerHTML=Array.from(heldKeys.values()).map(k=>`<kbd style="background:var(--accent,#6c63ff);color:#fff;padding:3px 10px;border-radius:6px;font-family:monospace">${k}</kbd>`).join('');
+    addEntry(e.key,e.code,'keyup');
+  };
+  document.addEventListener('keydown',window._kbDown);
+  document.addEventListener('keyup',window._kbUp);
+  showRes([{v:'Active',l:'Keyboard Test'},{v:'All keys',l:'Detected'}],[]);
+}
+
+function doTouchpadTest(){
+  const tout=document.getElementById('tout'),wrap=document.getElementById('tout-wrap');
+  if(wrap)wrap.classList.add('show');
+  if(!tout)return;
+  tout.className='tout';
+  tout.innerHTML=`<div style="display:flex;flex-direction:column;gap:12px">
+    <div id="tp-zone" style="height:220px;background:var(--b2,#f3f3f3);border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:crosshair;position:relative;overflow:hidden;user-select:none;touch-action:none">
+      <span id="tp-hint" style="opacity:.4;pointer-events:none">Move cursor or touch here</span>
+      <canvas id="tp-cv" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+    </div>
+    <div id="tp-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:13px">
+      <div style="background:var(--b2,#f3f3f3);border-radius:8px;padding:8px;text-align:center"><div id="tp-x" style="font-size:16px;font-weight:700">–</div><div style="opacity:.5">X</div></div>
+      <div style="background:var(--b2,#f3f3f3);border-radius:8px;padding:8px;text-align:center"><div id="tp-y" style="font-size:16px;font-weight:700">–</div><div style="opacity:.5">Y</div></div>
+      <div style="background:var(--b2,#f3f3f3);border-radius:8px;padding:8px;text-align:center"><div id="tp-ev" style="font-size:16px;font-weight:700">–</div><div style="opacity:.5">Event</div></div>
+    </div>
+    <div id="tp-log" style="max-height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:4px"></div>
+  </div>`;
+  const zone=tout.querySelector('#tp-zone');
+  const cv=tout.querySelector('#tp-cv');
+  const ctx=cv.getContext('2d');
+  const hint=tout.querySelector('#tp-hint');
+  const xEl=tout.querySelector('#tp-x'),yEl=tout.querySelector('#tp-y'),evEl=tout.querySelector('#tp-ev');
+  const logEl=tout.querySelector('#tp-log');
+  let lastX=null,lastY=null;
+  const resize=()=>{cv.width=zone.offsetWidth;cv.height=zone.offsetHeight;};
+  resize(); new ResizeObserver(resize).observe(zone);
+  const addLog=(type,x,y)=>{
+    const el=document.createElement('div');
+    el.style.cssText='font-size:12px;padding:3px 8px;background:var(--b2,#f3f3f3);border-radius:6px;opacity:.8';
+    el.textContent=`${type}  x:${x}  y:${y}`;
+    logEl.prepend(el);
+    if(logEl.children.length>10)logEl.removeChild(logEl.lastChild);
+  };
+  const draw=(x,y)=>{
+    if(!cv.width)return;
+    if(lastX!==null){ctx.beginPath();ctx.moveTo(lastX,lastY);ctx.lineTo(x,y);ctx.strokeStyle='rgba(108,99,255,0.7)';ctx.lineWidth=2;ctx.lineCap='round';ctx.stroke();}
+    ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle='#6c63ff';ctx.fill();
+    lastX=x;lastY=y;
+  };
+  window._tpMove=e=>{
+    hint.style.display='none';
+    const rect=zone.getBoundingClientRect();
+    const cx=Math.round(e.clientX-rect.left),cy=Math.round(e.clientY-rect.top);
+    xEl.textContent=cx;yEl.textContent=cy;evEl.textContent='move';
+    draw(cx,cy);
+  };
+  window._tpClick=e=>{
+    const rect=zone.getBoundingClientRect();
+    const cx=Math.round(e.clientX-rect.left),cy=Math.round(e.clientY-rect.top);
+    evEl.textContent='click';addLog('click',cx,cy);
+    ctx.beginPath();ctx.arc(cx,cy,12,0,Math.PI*2);ctx.strokeStyle='#6c63ff';ctx.lineWidth=2;ctx.stroke();
+  };
+  zone.addEventListener('pointermove',window._tpMove);
+  zone.addEventListener('pointerdown',window._tpClick);
+  showRes([{v:'Active',l:'Touchpad Test'},{v:'Move & click',l:'To test'}],[]);
+}
 function doHtmlEncode(){ _showTextResult(escHtml(gv('opt-inputText')||''),'html-encoded.txt'); }
 function doHtmlDecode(){ const d=document.createElement('textarea'); d.innerHTML=gv('opt-inputText')||''; _showTextResult(d.value,'html-decoded.txt'); }
 function doHtmlStripper(){ const d=document.createElement('div'); d.innerHTML=gv('opt-inputText')||''; _showTextResult(d.textContent||'','html-stripped.txt'); }
 function _b32abc(){ return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; }
 function doBase32Encode(){ const bytes=new TextEncoder().encode(gv('opt-inputText')||''); let bits='',o=''; bytes.forEach(b=>bits+=b.toString(2).padStart(8,'0')); const abc=_b32abc(); for(let i=0;i<bits.length;i+=5){const c=bits.slice(i,i+5).padEnd(5,'0'); o+=abc[parseInt(c,2)];} while(o.length%8)o+='='; _showTextResult(o,'base32.txt'); }
-function doBase32Decode(){ const s=(gv('opt-inputText')||'').replace(/=+$/,'').toUpperCase(); const abc=_b32abc(); let bits=''; for(const ch of s){const i=abc.indexOf(ch); if(i<0)continue; bits+=i.toString(2).padStart(5,'0');} const out=[]; for(let i=0;i+8<=bits.length;i+=8) out.push(parseInt(bits.slice(i,i+8),2)); _showTextResult(new TextDecoder().decode(new Uint8Array(out)),'base32-decoded.txt'); }
-function doPassphraseGenerator(){ const words=['apple','river','solar','bridge','ember','forest','tiger','cloud','violet','quantum','stone','piano']; const c=Math.max(2,Math.min(12,parseInt(gv('opt-count'))||5)); let out=[]; for(let i=0;i<c;i++) out.push(words[Math.floor(Math.random()*words.length)]); _showTextResult(out.join('-'),'passphrase.txt'); }
-function doPinGenerator(){ const digits=Math.max(4,Math.min(12,parseInt(gv('opt-digits'))||6)); const count=Math.max(1,Math.min(100,parseInt(gv('opt-count'))||10)); const pins=[]; for(let i=0;i<count;i++){let p=''; for(let d=0;d<digits;d++) p+=Math.floor(Math.random()*10); pins.push(p);} _showTextResult(pins.join('\n'),'pins.txt'); }
+function doBase32Decode(){
+  const raw=(gv('opt-inputText')||'').trim();
+  if(!raw)throw new Error('Enter a Base32 encoded string.');
+  const s=raw.replace(/=+$/,'').toUpperCase();
+  const abc=_b32abc();
+  if([...s].some(c=>!abc.includes(c)))throw new Error('Input contains invalid Base32 characters. Valid chars: A-Z and 2-7.');
+  let bits='';
+  for(const ch of s){const i=abc.indexOf(ch);if(i<0)continue;bits+=i.toString(2).padStart(5,'0');}
+  const out=[];
+  for(let i=0;i+8<=bits.length;i+=8) out.push(parseInt(bits.slice(i,i+8),2));
+  try{ _showTextResult(new TextDecoder('utf-8',{fatal:true}).decode(new Uint8Array(out)),'base32-decoded.txt'); }
+  catch(e){ throw new Error('Decoded bytes are not valid UTF-8 text. The input may be binary data.'); }
+}
+function doPassphraseGenerator(){
+  const WORDS = [
+    'apple','anchor','arrow','atlas','autumn','azure','badge','banjo','beacon','beetle',
+    'birch','blaze','bloom','blossom','blueprint','boulder','brave','breeze','bridge','bright',
+    'bronze','brush','bubble','cabin','candle','canyon','castle','cedar','cellar','chalk',
+    'charm','cherry','chisel','chrome','cipher','circuit','citrus','clover','cluster','cobalt',
+    'cobble','comet','coral','cotton','crane','crater','creek','crisp','crystal','cypress',
+    'dagger','daisy','dancer','dapple','dawn','dazzle','delta','desert','dew','diamond',
+    'dusk','eagle','echo','elder','ember','emerald','epic','falcon','fern','field',
+    'fjord','flame','flare','flint','flood','forest','forge','fossil','fractal','frosty',
+    'galaxy','garnet','gate','geyser','ginger','glacier','gleam','glider','glow','goblin',
+    'golden','granite','gravel','grotto','grove','harbor','harvest','hazel','hearth','helix',
+    'hollow','honey','horizon','jade','jasper','jetty','jungle','knight','lantern','larch',
+    'lava','lemon','lighthouse','lilac','limestone','linden','linen','locket','lodge','lofty',
+    'lotus','lunar','magnet','maple','marble','marsh','meadow','mesa','meteor','midnight',
+    'mint','mist','moat','monarch','monsoon','mossy','mountain','mystic','nebula','nickel',
+    'nimble','noble','north','nutmeg','oaken','ocean','olive','onyx','orbit','orchid',
+    'osprey','otter','outpost','oyster','paddle','parchment','parrot','pebble','petal','pillar',
+    'pine','plover','plum','polar','pond','poplar','porcupine','porch','prism','pulsar',
+    'quartz','quiver','radiant','rapids','raven','relay','ridge','ritual','river','robin',
+    'rocket','rocky','rosewood','rustic','sable','sage','salmon','sand','sapphire','saturn',
+    'scarlet','scholar','scout','seabird','seraph','serene','shadow','shale','shingle','silver',
+    'slate','solar','sonar','sparrow','spiral','sprout','spruce','stellar','stone','storm',
+    'stream','summit','sundial','sunspot','swift','thicket','thistle','thorn','tidal','timber',
+    'topaz','torch','trader','trail','turret','turtle','twilight','typhoon','valley','vapor',
+    'velvet','venture','violet','viper','vista','volcano','warden','wave','willow','wind',
+    'winter','wolf','wonder','wren','yarrow','zenith','zigzag','zinc','zircon','zone'
+  ];
+  const c = Math.max(2, Math.min(12, parseInt(gv('opt-count')) || 4));
+  const rawSep = gv('opt-sep') || '-';
+  const sep = rawSep === '(space)' ? ' ' : rawSep;
+  const capitalize = gk('opt-cap');
+  const count = Math.max(1, Math.min(20, parseInt(gv('opt-num')) || 5));
+  const phrases = [];
+  for (let i = 0; i < count; i++) {
+    const words = [];
+    for (let j = 0; j < c; j++) {
+      let w = WORDS[Math.floor(Math.random() * WORDS.length)];
+      if (capitalize) w = w[0].toUpperCase() + w.slice(1);
+      words.push(w);
+    }
+    phrases.push(words.join(sep));
+  }
+  const out = phrases.join('\n');
+  const tout = document.getElementById('tout'), wrap = document.getElementById('tout-wrap');
+  if (wrap) wrap.classList.add('show');
+  if (tout) { tout.className = 'tout'; tout.innerHTML = `<div class="pw-list">${phrases.map(p => `<div class="pw-item"><div style="flex:1;min-width:0"><code style="display:block;word-break:break-all">${p}</code></div><button class="pw-cp" onclick="navigator.clipboard.writeText('${p.replace(/'/g,"\\'")}').then(()=>toast('Copied!','ok'))">Copy</button></div>`).join('')}</div>`; }
+  const blob = new Blob([out], { type: 'text/plain' });
+  showRes([{ v: c + ' words', l: 'Length' }, { v: count + '', l: 'Generated' }, { v: WORDS.length + '', l: 'Word pool' }], [{ name: 'passphrases.txt', blob }]);
+  saveFile(blob, 'passphrases.txt');
+}
+function doPinGenerator(){
+  const digits=Math.max(4,Math.min(12,parseInt(gv('opt-digits'))||6));
+  const count=Math.max(1,Math.min(50,parseInt(gv('opt-count'))||10));
+  const sep=gk('opt-groups'); // group by 4 digits
+  const pins=[];
+  for(let i=0;i<count;i++){
+    let p='';
+    for(let d=0;d<digits;d++) p+=Math.floor(Math.random()*10);
+    pins.push(sep&&digits>4?p.match(/.{1,4}/g).join('-'):p);
+  }
+  const tout=document.getElementById('tout'),wrap=document.getElementById('tout-wrap');
+  if(wrap)wrap.classList.add('show');
+  if(tout){
+    tout.className='tout';
+    tout.innerHTML=`<div class="pw-list">${pins.map(p=>`<div class="pw-item"><div style="flex:1;min-width:0"><code style="display:block;word-break:break-all;letter-spacing:2px">${p}</code></div><button class="pw-cp" onclick="navigator.clipboard.writeText('${p}').then(()=>toast('Copied!','ok'))">Copy</button></div>`).join('')}</div>`;
+  }
+  const blob=new Blob([pins.join('\n')],{type:'text/plain'});
+  showRes([{v:digits+' digits',l:'Length'},{v:count+'',l:'Generated'}],[{name:'pins.txt',blob}]);
+  saveFile(blob,'pins.txt');
+}
 
 async function doMetaScrub() {
   if (!toolFiles.length) return; const results=[]; let removed=0;
@@ -739,22 +1458,67 @@ async function doPFolio() {
 }
 
 async function doWCount() {
-  if (!toolFiles.length) return; const f=toolFiles[0]; setP(20,'Reading…');
-  let text='';
-  if(f.name.endsWith('.pdf')){await need('pdfjs');const pdf=await pdfjsLib.getDocument({data:await readBuf(f)}).promise;for(let i=1;i<=pdf.numPages;i++){const p=await pdf.getPage(i);const c=await p.getTextContent();text+=c.items.map(item=>item.str).join(' ');}}
-  else text=await readText(f);
-  const words=text.trim().split(/\s+/).filter(w=>w).length;
-  const chars=text.length, charsNoSp=text.replace(/\s/g,'').length;
-  const sentences=text.split(/[.!?]+/).filter(s=>s.trim()).length;
-  const paragraphs=text.split(/\n{2,}/).filter(p=>p.trim()).length;
-  const lines=text.split(/\n/).length;
-  const uniqueWords=new Set(text.toLowerCase().split(/\s+/).filter(w=>w.replace(/[^a-zA-Z]/g,''))).size;
-  const readMin=Math.ceil(words/200), speakMin=Math.ceil(words/130);
-  const r=`Word Count Report — ${f.name}\n${'─'.repeat(44)}\nWords:                  ${words.toLocaleString()}\nUnique words:           ${uniqueWords.toLocaleString()}\nCharacters (with spaces): ${chars.toLocaleString()}\nCharacters (no spaces): ${charsNoSp.toLocaleString()}\nSentences:              ${sentences.toLocaleString()}\nParagraphs:             ${paragraphs.toLocaleString()}\nLines:                  ${lines.toLocaleString()}\n\nReading time (~200 wpm): ~${readMin} min\nSpeaking time (~130 wpm): ~${speakMin} min\n`;
+  if (!toolFiles.length) return;
+  const f = toolFiles[0];
+  setP(20, 'Reading…');
+  let text = '';
+  const ext = f.name.split('.').pop().toLowerCase();
+
+  if (ext === 'pdf') {
+    await need('pdfjs');
+    const pdf = await pdfjsLib.getDocument({ data: await readBuf(f) }).promise;
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const p = await pdf.getPage(i);
+      const c = await p.getTextContent();
+      text += c.items.map(item => item.str).join(' ') + '\n';
+    }
+  } else if (ext === 'docx' || ext === 'doc') {
+    await need('jszip');
+    try {
+      const buf = await readBuf(f);
+      const zip = await JSZip.loadAsync(buf);
+      const docFile = zip.file('word/document.xml');
+      if (!docFile) throw new Error('Not a valid DOCX');
+      const xmlStr = await docFile.async('string');
+      const xmlDoc = new DOMParser().parseFromString(xmlStr, 'application/xml');
+      text = Array.from(xmlDoc.querySelectorAll('t')).map(t => t.textContent).join(' ');
+    } catch (e) {
+      throw new Error('Could not read DOCX: ' + e.message);
+    }
+  } else {
+    text = await readText(f);
+  }
+
+  setP(80, 'Counting…');
+  const words = text.trim().split(/\s+/).filter(w => w).length;
+  const chars = text.length;
+  const charsNoSp = text.replace(/\s/g, '').length;
+  const sentences = (text.match(/[.!?]+/g) || []).length;
+  const paragraphs = text.split(/\n{2,}/).filter(p => p.trim()).length || 1;
+  const lines = text.split(/\n/).length;
+  const uniqueWords = new Set(text.toLowerCase().split(/\s+/).filter(w => w.replace(/[^a-zA-Z]/g, ''))).size;
+  const readMin = Math.ceil(words / 200);
+  const speakMin = Math.ceil(words / 130);
+  const avgWordLen = words > 0 ? (charsNoSp / words).toFixed(1) : '0';
+
+  const r = `Word Count Report — ${f.name}\n${'─'.repeat(44)}\n` +
+    `Words:                    ${words.toLocaleString()}\n` +
+    `Unique words:             ${uniqueWords.toLocaleString()}\n` +
+    `Characters (with spaces): ${chars.toLocaleString()}\n` +
+    `Characters (no spaces):   ${charsNoSp.toLocaleString()}\n` +
+    `Average word length:      ${avgWordLen} chars\n` +
+    `Sentences:                ${sentences.toLocaleString()}\n` +
+    `Paragraphs:               ${paragraphs.toLocaleString()}\n` +
+    `Lines:                    ${lines.toLocaleString()}\n\n` +
+    `Reading time (~200 wpm):  ~${readMin} min\n` +
+    `Speaking time (~130 wpm): ~${speakMin} min\n`;
+
   showTO(r);
-  const blob=new Blob([r],{type:'text/plain'});
-  showRes([{v:words.toLocaleString(),l:'Words'},{v:chars.toLocaleString(),l:'Characters'},{v:'~'+readMin+' min',l:'Read time'}],[{name:bn(f.name)+'_wordcount.txt',blob}]);
+  const blob = new Blob([r], { type: 'text/plain' });
+  showRes([{ v: words.toLocaleString(), l: 'Words' }, { v: chars.toLocaleString(), l: 'Characters' }, { v: '~' + readMin + ' min', l: 'Read time' }], [{ name: bn(f.name) + '_wordcount.txt', blob }]);
 }
+
+async function _doWCountOldBodyRemoved_placeholder() { if(false){} }
 
 async function doC2Pdf() {
   await need('pdflib'); if(!toolFiles.length)return; const f=toolFiles[0];
