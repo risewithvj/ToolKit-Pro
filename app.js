@@ -716,7 +716,7 @@ const TOOL_FNS = {
   'add-page-numbers':'doPN','stamp-pdf':'doStamp','pdf-info':'doPInfo','delete-pdf-pages':'doDelP',
   'duplicate-pdf-pages':'doDupP','reorder-pdf':'doReOrd','pdf-header-footer':'doPHF',
   'flatten-pdf':'doFlat','pdf-thumbnail':'doPThumb','pdf-to-csv':'doPCsv','pdf-bookmarks':'doPBM',
-  'pdf-to-word':'doPdfToWord','word-to-pdf':'doWordToPdf','ocr-pdf':'doOCRPdf',
+  'pdf-to-word':'doPToWord','word-to-pdf':'doWordToPdf','ocr-pdf':'doOCRPdf',
   // Image
   'compress-image':'doCImg','resize-image':'doRImg','crop-image':'doCropImg',
   'convert-to-jpg':'doC2J','convert-from-jpg':'doCFJ','grayscale':'doGray',
