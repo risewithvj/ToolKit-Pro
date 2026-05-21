@@ -6,7 +6,6 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 from docx import Document
-from docx.shared import Inches
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
