@@ -288,3 +288,49 @@ async function doPBM() {
   showRes([{ v: bms.length + '', l: 'Bookmarks' }, { v: total + '', l: 'Pages' }], [{ name, blob }]);
   saveFile(blob, name);
 }
+
+async function doPToWord() {
+  if (!toolFiles.length) { showErr('Upload a PDF file first.'); return; }
+
+  const file = toolFiles[0];
+  if (!/\.pdf$/i.test(file.name)) { showErr('Only PDF files are supported.'); return; }
+
+  try {
+    setP(15, 'Uploading file to local conversion engine…');
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+
+    const res = await fetch('http://127.0.0.1:8000/api/pdf-to-word', {
+      method: 'POST',
+      body: formData
+    });
+
+    setP(62, 'Parsing layout, fonts, text blocks, and movable objects…');
+
+    if (!res.ok) {
+      let detail = `Request failed (${res.status})`;
+      try {
+        const payload = await res.json();
+        if (payload?.detail) detail = payload.detail;
+      } catch {}
+      throw new Error(detail);
+    }
+
+    setP(88, 'Downloading generated editable Word document…');
+    const blob = await res.blob();
+
+    const outputName = bn(file.name) + '_editable.docx';
+    showRes([
+      { v: 'FastAPI + pdf2docx', l: 'Engine' },
+      { v: fmtSz(file.size), l: 'Source' },
+      { v: fmtSz(blob.size), l: 'DOCX Size' },
+      { v: 'Editable', l: 'Output Type' }
+    ], [{ name: outputName, blob }]);
+
+    saveFile(blob, outputName);
+    setP(100, 'Done.');
+  } catch (err) {
+    showErr('PDF → Word conversion failed: ' + (err?.message || err));
+    throw err;
+  }
+}
