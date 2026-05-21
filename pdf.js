@@ -319,17 +319,14 @@ async function doPToWord() {
     setP(88, 'Downloading generated editable Word document…');
     const blob = await res.blob();
 
-    const failedPages = (res.headers.get('X-Conversion-Failed-Pages') || '').trim();
     const outputName = bn(file.name) + '_editable.docx';
     showRes([
       { v: 'FastAPI + pdf2docx', l: 'Engine' },
       { v: fmtSz(file.size), l: 'Source' },
       { v: fmtSz(blob.size), l: 'DOCX Size' },
-      { v: 'Editable', l: 'Output Type' },
-      { v: failedPages ? failedPages : 'None', l: 'Image fallback pages' }
+      { v: 'Editable', l: 'Output Type' }
     ], [{ name: outputName, blob }]);
 
-    if (failedPages) showErr('Some pages were too complex for full text reconstruction. Fallback image pages: ' + failedPages);
     saveFile(blob, outputName);
     setP(100, 'Done.');
   } catch (err) {
